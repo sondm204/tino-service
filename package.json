@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "db:link": "supabase link --project-ref mskrszofomqnsixkdvvu",
+    "db:migration:new": "supabase migration new",
+    "db:push": "supabase db push"
   },
   "keywords": [],
   "author": "",

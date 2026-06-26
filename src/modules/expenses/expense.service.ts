@@ -41,6 +41,14 @@ export type ExpenseResponse = {
   created_at: string;
   updated_at: string | null;
   deleted_at: string | null;
+  splits?: ExpenseSplitResponse[];
+};
+
+export type ExpenseSplitResponse = {
+  user_id: string;
+  amount: number | string | null;
+  percentage: number | string | null;
+  shares: number | string | null;
 };
 
 function validateCurrency(currency: string) {
@@ -81,7 +89,39 @@ export async function listExpenses(groupId: string, pageable: PageableRequest) {
     throw new AppError(400, 'EXPENSE_LIST_FAILED', error.message);
   }
 
-  return toPageableResponse((data ?? []) as ExpenseResponse[], pageable, count ?? 0);
+  const expenses = (data ?? []) as ExpenseResponse[];
+  const expenseIds = expenses.map((expense) => expense.id);
+  const splitsByExpense = new Map<string, ExpenseSplitResponse[]>();
+
+  if (expenseIds.length > 0) {
+    const { data: splits, error: splitsError } = await supabase
+      .from('expense_splits')
+      .select('expense_id, user_id, amount, percentage, shares')
+      .in('expense_id', expenseIds);
+
+    if (splitsError) {
+      throw new AppError(400, 'EXPENSE_SPLIT_LIST_FAILED', splitsError.message);
+    }
+
+    for (const split of splits ?? []) {
+      const row = split as ExpenseSplitResponse & { expense_id: string };
+      const current = splitsByExpense.get(row.expense_id) ?? [];
+      current.push({
+        user_id: row.user_id,
+        amount: row.amount,
+        percentage: row.percentage,
+        shares: row.shares,
+      });
+      splitsByExpense.set(row.expense_id, current);
+    }
+  }
+
+  const expensesWithSplits = expenses.map((expense) => ({
+    ...expense,
+    splits: splitsByExpense.get(expense.id) ?? [],
+  }));
+
+  return toPageableResponse(expensesWithSplits, pageable, count ?? 0);
 }
 
 export async function createExpense(groupId: string, payload: CreateExpenseRequest) {

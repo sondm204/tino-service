@@ -13,7 +13,8 @@ import {
 
 export async function getGroups(req: Request, res: Response) {
   try {
-    const data = await listGroups(getPageable(req));
+    const userId = typeof req.query.user_id === 'string' ? req.query.user_id : undefined;
+    const data = await listGroups(getPageable(req), userId);
 
     return sendSuccess(res, 200, 'GROUP_LISTED', 'Groups fetched successfully', data);
   } catch (error) {

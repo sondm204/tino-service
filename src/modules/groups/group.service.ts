@@ -27,6 +27,8 @@ export type GroupResponse = {
   owner_id: string;
   created_at: string;
   updated_at: string | null;
+  total_amount?: number;
+  user_share_amount?: number;
 };
 
 export type GroupMemberResponse = {
@@ -46,6 +48,7 @@ export type AddGroupMemberRequest = {
 
 type ExpenseRow = {
   id: string;
+  group_id: string;
   total_amount: number | string;
   paid_by_user_id: string;
 };
@@ -56,7 +59,11 @@ type ExpenseSplitRow = {
   amount: number | string | null;
 };
 
-export async function listGroups(pageable: PageableRequest) {
+export async function listGroups(pageable: PageableRequest, userId?: string) {
+  return listGroupsWithTotals(pageable, userId);
+}
+
+export async function listGroupsWithTotals(pageable: PageableRequest, userId?: string) {
   const { from, to } = toSupabaseRange(pageable);
   const { data, error, count } = await supabase
     .from('groups')
@@ -68,7 +75,101 @@ export async function listGroups(pageable: PageableRequest) {
     throw new AppError(400, 'GROUP_LIST_FAILED', error.message);
   }
 
-  return toPageableResponse((data ?? []) as GroupResponse[], pageable, count ?? 0);
+  const groups = (data ?? []) as GroupResponse[];
+  const groupIds = groups.map((group) => group.id);
+
+  if (groupIds.length === 0) {
+    return toPageableResponse(groups, pageable, count ?? 0);
+  }
+
+  const { data: expenses, error: expensesError } = await supabase
+    .from('expenses')
+    .select('id, group_id, total_amount, paid_by_user_id')
+    .in('group_id', groupIds)
+    .is('deleted_at', null);
+
+  if (expensesError) {
+    throw new AppError(400, 'EXPENSE_LIST_FAILED', expensesError.message);
+  }
+
+  const { data: members, error: membersError } = await supabase
+    .from('group_members')
+    .select('*')
+    .in('group_id', groupIds)
+    .eq('status', GroupMemberStatus.Active);
+
+  if (membersError) {
+    throw new AppError(400, 'GROUP_MEMBER_LIST_FAILED', membersError.message);
+  }
+
+  const expenseRows = (expenses ?? []) as ExpenseRow[];
+  const expenseIds = expenseRows.map((expense) => expense.id);
+  const totalsByGroup = new Map<string, number>();
+  const membersByGroup = new Map<string, string[]>();
+  const splitsByExpense = new Map<string, ExpenseSplitRow[]>();
+
+  for (const member of (members ?? []) as GroupMemberResponse[]) {
+    const current = membersByGroup.get(member.group_id) ?? [];
+    current.push(member.user_id);
+    membersByGroup.set(member.group_id, current);
+  }
+
+  if (expenseIds.length > 0) {
+    const { data: splits, error: splitsError } = await supabase
+      .from('expense_splits')
+      .select('expense_id, user_id, amount')
+      .in('expense_id', expenseIds);
+
+    if (splitsError) {
+      throw new AppError(400, 'EXPENSE_SPLIT_LIST_FAILED', splitsError.message);
+    }
+
+    for (const split of (splits ?? []) as ExpenseSplitRow[]) {
+      const current = splitsByExpense.get(split.expense_id) ?? [];
+      current.push(split);
+      splitsByExpense.set(split.expense_id, current);
+    }
+  }
+
+  const userShareByGroup = new Map<string, number>();
+
+  for (const expense of expenseRows) {
+    const amount = Number(expense.total_amount);
+    totalsByGroup.set(expense.group_id, (totalsByGroup.get(expense.group_id) ?? 0) + amount);
+
+    if (!userId) {
+      continue;
+    }
+
+    const splits = splitsByExpense.get(expense.id) ?? [];
+    const userSplit = splits.find((split) => split.user_id === userId);
+    let userShare = 0;
+
+    if (userSplit) {
+      userShare = Number(userSplit.amount ?? 0);
+    } else if (splits.length === 0) {
+      const activeMemberIds = membersByGroup.get(expense.group_id) ?? [];
+
+      if (activeMemberIds.includes(userId) && activeMemberIds.length > 0) {
+        userShare = amount / activeMemberIds.length;
+      }
+    }
+
+    if (userShare > 0) {
+      userShareByGroup.set(
+        expense.group_id,
+        (userShareByGroup.get(expense.group_id) ?? 0) + userShare
+      );
+    }
+  }
+
+  const groupsWithTotals = groups.map((group) => ({
+    ...group,
+    total_amount: totalsByGroup.get(group.id) ?? 0,
+    user_share_amount: userShareByGroup.get(group.id) ?? 0,
+  }));
+
+  return toPageableResponse(groupsWithTotals, pageable, count ?? 0);
 }
 
 export async function getGroup(groupId: string) {
