@@ -1,16 +1,16 @@
 import { AppError } from '../../common/app-error.js';
 import {
-  GroupCurrency,
-  GroupMemberRole,
-  GroupMemberStatus,
-  GroupType,
+  WalletCurrency,
+  WalletMemberRole,
+  WalletMemberStatus,
+  WalletType,
   isEnumValue,
 } from '../../common/enums.js';
 import type { PageableRequest } from '../../common/pageable.js';
 import { toPageableResponse, toSupabaseRange } from '../../common/pageable.js';
 import { supabase } from '../../db/supabase.js';
 
-export type CreateGroupRequest = {
+export type CreateWalletRequest = {
   name?: string;
   description?: string | null;
   type?: string;
@@ -18,12 +18,12 @@ export type CreateGroupRequest = {
   owner_id?: string;
 };
 
-export type GroupResponse = {
+export type WalletResponse = {
   id: string;
   name: string;
   description: string | null;
-  type: GroupType;
-  currency: GroupCurrency;
+  type: WalletType;
+  currency: WalletCurrency;
   owner_id: string;
   created_at: string;
   updated_at: string | null;
@@ -31,16 +31,16 @@ export type GroupResponse = {
   user_share_amount?: number;
 };
 
-export type GroupMemberResponse = {
+export type WalletMemberResponse = {
   id: string;
-  group_id: string;
+  wallet_id: string;
   user_id: string;
-  role: GroupMemberRole;
-  status: GroupMemberStatus;
+  role: WalletMemberRole;
+  status: WalletMemberStatus;
   joined_at: string;
 };
 
-export type GroupMemberWithUserResponse = GroupMemberResponse & {
+export type WalletMemberWithUserResponse = WalletMemberResponse & {
   user: {
     id: string;
     email: string;
@@ -50,7 +50,7 @@ export type GroupMemberWithUserResponse = GroupMemberResponse & {
   };
 };
 
-export type AddGroupMemberRequest = {
+export type AddWalletMemberRequest = {
   user_id?: string;
   role?: string;
   status?: string;
@@ -58,12 +58,12 @@ export type AddGroupMemberRequest = {
 
 type ExpenseRow = {
   id: string;
-  group_id: string;
+  wallet_id: string;
   total_amount: number | string;
   paid_by_user_id: string;
 };
 
-type SummaryExpenseRow = Omit<ExpenseRow, 'group_id'>;
+type SummaryExpenseRow = Omit<ExpenseRow, 'wallet_id'>;
 
 type ExpenseSplitRow = {
   expense_id: string;
@@ -71,52 +71,52 @@ type ExpenseSplitRow = {
   amount: number | string | null;
 };
 
-export async function listGroups(pageable: PageableRequest, userId?: string) {
+export async function listWallets(pageable: PageableRequest, userId?: string) {
   if (!userId) {
     throw new AppError(401, 'UNAUTHORIZED', 'Authentication is required');
   }
 
-  return listGroupsWithTotals(pageable, userId);
+  return listWalletsWithTotals(pageable, userId);
 }
 
-export async function listGroupsWithTotals(pageable: PageableRequest, userId: string) {
+export async function listWalletsWithTotals(pageable: PageableRequest, userId: string) {
   const { from, to } = toSupabaseRange(pageable);
   const { data, error, count } = await supabase
-    .from('groups')
-    .select('*, group_members!inner(user_id, status)', { count: 'exact' })
-    .eq('group_members.user_id', userId)
-    .eq('group_members.status', GroupMemberStatus.Active)
+    .from('wallets')
+    .select('*, wallet_members!inner(user_id, status)', { count: 'exact' })
+    .eq('wallet_members.user_id', userId)
+    .eq('wallet_members.status', WalletMemberStatus.Active)
     .order('created_at', { ascending: false })
     .range(from, to);
 
   if (error) {
-    throw new AppError(400, 'GROUP_LIST_FAILED', error.message);
+    throw new AppError(400, 'WALLET_LIST_FAILED', error.message);
   }
 
-  const groups = (data ?? []).map((row) => {
+  const wallets = (data ?? []).map((row) => {
     const {
-      group_members: _groupMembers,
-      ...group
-    } = row as GroupResponse & { group_members: unknown };
-    return group;
+      wallet_members: _walletMembers,
+      ...wallet
+    } = row as WalletResponse & { wallet_members: unknown };
+    return wallet;
   });
-  const groupIds = groups.map((group) => group.id);
+  const walletIds = wallets.map((wallet) => wallet.id);
 
-  if (groupIds.length === 0) {
-    return toPageableResponse(groups, pageable, count ?? 0);
+  if (walletIds.length === 0) {
+    return toPageableResponse(wallets, pageable, count ?? 0);
   }
 
   const [expensesResult, membersResult] = await Promise.all([
     supabase
       .from('expenses')
-      .select('id, group_id, total_amount, paid_by_user_id')
-      .in('group_id', groupIds)
+      .select('id, wallet_id, total_amount, paid_by_user_id')
+      .in('wallet_id', walletIds)
       .is('deleted_at', null),
     supabase
-      .from('group_members')
+      .from('wallet_members')
       .select('*')
-      .in('group_id', groupIds)
-      .eq('status', GroupMemberStatus.Active),
+      .in('wallet_id', walletIds)
+      .eq('status', WalletMemberStatus.Active),
   ]);
 
   const { data: expenses, error: expensesError } = expensesResult;
@@ -128,19 +128,19 @@ export async function listGroupsWithTotals(pageable: PageableRequest, userId: st
   const { data: members, error: membersError } = membersResult;
 
   if (membersError) {
-    throw new AppError(400, 'GROUP_MEMBER_LIST_FAILED', membersError.message);
+    throw new AppError(400, 'WALLET_MEMBER_LIST_FAILED', membersError.message);
   }
 
   const expenseRows = (expenses ?? []) as ExpenseRow[];
   const expenseIds = expenseRows.map((expense) => expense.id);
-  const totalsByGroup = new Map<string, number>();
-  const membersByGroup = new Map<string, string[]>();
+  const totalsByWallet = new Map<string, number>();
+  const membersByWallet = new Map<string, string[]>();
   const splitsByExpense = new Map<string, ExpenseSplitRow[]>();
 
-  for (const member of (members ?? []) as GroupMemberResponse[]) {
-    const current = membersByGroup.get(member.group_id) ?? [];
+  for (const member of (members ?? []) as WalletMemberResponse[]) {
+    const current = membersByWallet.get(member.wallet_id) ?? [];
     current.push(member.user_id);
-    membersByGroup.set(member.group_id, current);
+    membersByWallet.set(member.wallet_id, current);
   }
 
   if (expenseIds.length > 0) {
@@ -160,11 +160,11 @@ export async function listGroupsWithTotals(pageable: PageableRequest, userId: st
     }
   }
 
-  const userShareByGroup = new Map<string, number>();
+  const userShareByWallet = new Map<string, number>();
 
   for (const expense of expenseRows) {
     const amount = Number(expense.total_amount);
-    totalsByGroup.set(expense.group_id, (totalsByGroup.get(expense.group_id) ?? 0) + amount);
+    totalsByWallet.set(expense.wallet_id, (totalsByWallet.get(expense.wallet_id) ?? 0) + amount);
 
     const splits = splitsByExpense.get(expense.id) ?? [];
     const userSplit = splits.find((split) => split.user_id === userId);
@@ -173,7 +173,7 @@ export async function listGroupsWithTotals(pageable: PageableRequest, userId: st
     if (userSplit) {
       userShare = Number(userSplit.amount ?? 0);
     } else if (splits.length === 0) {
-      const activeMemberIds = membersByGroup.get(expense.group_id) ?? [];
+      const activeMemberIds = membersByWallet.get(expense.wallet_id) ?? [];
 
       if (activeMemberIds.includes(userId) && activeMemberIds.length > 0) {
         userShare = amount / activeMemberIds.length;
@@ -181,84 +181,84 @@ export async function listGroupsWithTotals(pageable: PageableRequest, userId: st
     }
 
     if (userShare > 0) {
-      userShareByGroup.set(
-        expense.group_id,
-        (userShareByGroup.get(expense.group_id) ?? 0) + userShare
+      userShareByWallet.set(
+        expense.wallet_id,
+        (userShareByWallet.get(expense.wallet_id) ?? 0) + userShare
       );
     }
   }
 
-  const groupsWithTotals = groups.map((group) => ({
-    ...group,
-    total_amount: totalsByGroup.get(group.id) ?? 0,
-    user_share_amount: userShareByGroup.get(group.id) ?? 0,
+  const walletsWithTotals = wallets.map((wallet) => ({
+    ...wallet,
+    total_amount: totalsByWallet.get(wallet.id) ?? 0,
+    user_share_amount: userShareByWallet.get(wallet.id) ?? 0,
   }));
 
-  return toPageableResponse(groupsWithTotals, pageable, count ?? 0);
+  return toPageableResponse(walletsWithTotals, pageable, count ?? 0);
 }
 
-export async function getGroup(groupId: string) {
+export async function getWallet(walletId: string) {
   const { data, error } = await supabase
-    .from('groups')
+    .from('wallets')
     .select('*')
-    .eq('id', groupId)
+    .eq('id', walletId)
     .single();
 
   if (error || !data) {
-    throw new AppError(404, 'GROUP_NOT_FOUND', 'Group not found');
+    throw new AppError(404, 'WALLET_NOT_FOUND', 'Wallet not found');
   }
 
-  return data as GroupResponse;
+  return data as WalletResponse;
 }
 
-export async function requireGroupMember(groupId: string, userId: string) {
+export async function requireWalletMember(walletId: string, userId: string) {
   const { data, error } = await supabase
-    .from('group_members')
-    .select('id, group_id, user_id, role, status, joined_at')
-    .eq('group_id', groupId)
+    .from('wallet_members')
+    .select('id, wallet_id, user_id, role, status, joined_at')
+    .eq('wallet_id', walletId)
     .eq('user_id', userId)
-    .eq('status', GroupMemberStatus.Active)
+    .eq('status', WalletMemberStatus.Active)
     .single();
 
   if (error || !data) {
     throw new AppError(
       403,
-      'GROUP_ACCESS_DENIED',
-      'You are not an active member of this group'
+      'WALLET_ACCESS_DENIED',
+      'You are not an active member of this wallet'
     );
   }
 
-  return data as GroupMemberResponse;
+  return data as WalletMemberResponse;
 }
 
-export async function requireGroupOwner(groupId: string, userId: string) {
-  const member = await requireGroupMember(groupId, userId);
+export async function requireWalletOwner(walletId: string, userId: string) {
+  const member = await requireWalletMember(walletId, userId);
 
-  if (member.role !== GroupMemberRole.Owner) {
+  if (member.role !== WalletMemberRole.Owner) {
     throw new AppError(
       403,
-      'GROUP_OWNER_REQUIRED',
-      'Only the group owner can perform this action'
+      'WALLET_OWNER_REQUIRED',
+      'Only the wallet owner can perform this action'
     );
   }
 
   return member;
 }
 
-export async function listGroupMembers(groupId: string, actorUserId: string) {
-  await requireGroupMember(groupId, actorUserId);
+export async function listWalletMembers(walletId: string, actorUserId: string) {
+  await requireWalletMember(walletId, actorUserId);
 
   const { data, error } = await supabase
-    .from('group_members')
+    .from('wallet_members')
     .select(
       `
         id,
-        group_id,
+        wallet_id,
         user_id,
         role,
         status,
         joined_at,
-        user:users!group_members_user_id_fkey (
+        user:users!wallet_members_user_id_fkey (
           id,
           email,
           display_name,
@@ -267,37 +267,37 @@ export async function listGroupMembers(groupId: string, actorUserId: string) {
         )
       `
     )
-    .eq('group_id', groupId)
-    .eq('status', GroupMemberStatus.Active)
+    .eq('wallet_id', walletId)
+    .eq('status', WalletMemberStatus.Active)
     .order('joined_at', { ascending: true });
 
   if (error) {
-    throw new AppError(400, 'GROUP_MEMBER_LIST_FAILED', error.message);
+    throw new AppError(400, 'WALLET_MEMBER_LIST_FAILED', error.message);
   }
 
-  return (data ?? []) as unknown as GroupMemberWithUserResponse[];
+  return (data ?? []) as unknown as WalletMemberWithUserResponse[];
 }
 
-export async function createGroup(payload: CreateGroupRequest, ownerId: string) {
+export async function createWallet(payload: CreateWalletRequest, ownerId: string) {
   const name = payload.name?.trim();
   const description = payload.description?.trim() || null;
-  const type = payload.type?.trim() || GroupType.Personal;
-  const currency = payload.currency?.trim().toUpperCase() || GroupCurrency.VND;
+  const type = payload.type?.trim() || WalletType.Personal;
+  const currency = payload.currency?.trim().toUpperCase() || WalletCurrency.VND;
 
   if (!name) {
-    throw new AppError(400, 'VALIDATION_ERROR', 'Group name is required');
+    throw new AppError(400, 'VALIDATION_ERROR', 'Wallet name is required');
   }
 
-  if (!isEnumValue(GroupType, type)) {
+  if (!isEnumValue(WalletType, type)) {
     throw new AppError(400, 'VALIDATION_ERROR', 'type is invalid');
   }
 
-  if (!isEnumValue(GroupCurrency, currency)) {
+  if (!isEnumValue(WalletCurrency, currency)) {
     throw new AppError(400, 'VALIDATION_ERROR', 'currency is invalid');
   }
 
-  const { data: group, error: groupError } = await supabase
-    .from('groups')
+  const { data: wallet, error: walletError } = await supabase
+    .from('wallets')
     .insert({
       name,
       description,
@@ -308,60 +308,60 @@ export async function createGroup(payload: CreateGroupRequest, ownerId: string) 
     .select('*')
     .single();
 
-  if (groupError) {
-    throw new AppError(400, 'GROUP_CREATE_FAILED', groupError.message);
+  if (walletError) {
+    throw new AppError(400, 'WALLET_CREATE_FAILED', walletError.message);
   }
 
   const { data: member, error: memberError } = await supabase
-    .from('group_members')
+    .from('wallet_members')
     .insert({
-      group_id: group.id,
+      wallet_id: wallet.id,
       user_id: ownerId,
-      role: GroupMemberRole.Owner,
-      status: GroupMemberStatus.Active,
+      role: WalletMemberRole.Owner,
+      status: WalletMemberStatus.Active,
     })
     .select('*')
     .single();
 
   if (memberError) {
-    await supabase.from('groups').delete().eq('id', group.id);
+    await supabase.from('wallets').delete().eq('id', wallet.id);
 
-    throw new AppError(400, 'GROUP_MEMBER_CREATE_FAILED', memberError.message);
+    throw new AppError(400, 'WALLET_MEMBER_CREATE_FAILED', memberError.message);
   }
 
   return {
-    group: group as GroupResponse,
-    member: member as GroupMemberResponse,
+    wallet: wallet as WalletResponse,
+    member: member as WalletMemberResponse,
   };
 }
 
-export async function addGroupMember(
-  groupId: string,
-  payload: AddGroupMemberRequest,
+export async function addWalletMember(
+  walletId: string,
+  payload: AddWalletMemberRequest,
   actorUserId: string
 ) {
   const userId = payload.user_id?.trim();
-  const role = payload.role?.trim() || GroupMemberRole.Member;
-  const status = payload.status?.trim() || GroupMemberStatus.Active;
+  const role = payload.role?.trim() || WalletMemberRole.Member;
+  const status = payload.status?.trim() || WalletMemberStatus.Active;
 
   if (!userId) {
     throw new AppError(400, 'VALIDATION_ERROR', 'user_id is required');
   }
 
-  if (!isEnumValue(GroupMemberRole, role)) {
+  if (!isEnumValue(WalletMemberRole, role)) {
     throw new AppError(400, 'VALIDATION_ERROR', 'role is invalid');
   }
 
-  if (!isEnumValue(GroupMemberStatus, status)) {
+  if (!isEnumValue(WalletMemberStatus, status)) {
     throw new AppError(400, 'VALIDATION_ERROR', 'status is invalid');
   }
 
-  await requireGroupOwner(groupId, actorUserId);
+  await requireWalletOwner(walletId, actorUserId);
 
   const { data, error } = await supabase
-    .from('group_members')
+    .from('wallet_members')
     .insert({
-      group_id: groupId,
+      wallet_id: walletId,
       user_id: userId,
       role,
       status,
@@ -370,18 +370,18 @@ export async function addGroupMember(
     .single();
 
   if (error) {
-    throw new AppError(400, 'GROUP_MEMBER_CREATE_FAILED', error.message);
+    throw new AppError(400, 'WALLET_MEMBER_CREATE_FAILED', error.message);
   }
 
-  return data as GroupMemberResponse;
+  return data as WalletMemberResponse;
 }
 
-export async function getGroupSummary(
-  groupId: string,
+export async function getWalletSummary(
+  walletId: string,
   month: string | undefined,
   userId: string
 ) {
-  await requireGroupMember(groupId, userId);
+  await requireWalletMember(walletId, userId);
   const targetMonth = month || new Date().toISOString().slice(0, 7);
 
   if (!/^\d{4}-\d{2}$/.test(targetMonth)) {
@@ -393,17 +393,17 @@ export async function getGroupSummary(
   periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
   const periodEndDate = periodEnd.toISOString().slice(0, 10);
 
-  const [group, membersResult, expensesResult] = await Promise.all([
-    getGroup(groupId),
+  const [wallet, membersResult, expensesResult] = await Promise.all([
+    getWallet(walletId),
     supabase
-      .from('group_members')
+      .from('wallet_members')
       .select('*')
-      .eq('group_id', groupId)
-      .eq('status', GroupMemberStatus.Active),
+      .eq('wallet_id', walletId)
+      .eq('status', WalletMemberStatus.Active),
     supabase
       .from('expenses')
       .select('id, total_amount, paid_by_user_id')
-      .eq('group_id', groupId)
+      .eq('wallet_id', walletId)
       .gte('expense_date', periodStart)
       .lt('expense_date', periodEndDate)
       .is('deleted_at', null),
@@ -412,10 +412,10 @@ export async function getGroupSummary(
   const { data: members, error: membersError } = membersResult;
 
   if (membersError) {
-    throw new AppError(400, 'GROUP_MEMBER_LIST_FAILED', membersError.message);
+    throw new AppError(400, 'WALLET_MEMBER_LIST_FAILED', membersError.message);
   }
 
-  const activeMembers = (members ?? []) as GroupMemberResponse[];
+  const activeMembers = (members ?? []) as WalletMemberResponse[];
   const { data: expenses, error: expensesError } = expensesResult;
 
   if (expensesError) {
@@ -506,7 +506,7 @@ export async function getGroupSummary(
         from_user_id: debtor.user_id,
         to_user_id: creditor.user_id,
         amount,
-        currency: group.currency,
+        currency: wallet.currency,
       });
     }
 
@@ -523,11 +523,11 @@ export async function getGroupSummary(
   }
 
   return {
-    group,
+    wallet,
     period_start: periodStart,
     period_end: periodEndDate,
     total_amount: totalAmount,
-    currency: group.currency,
+    currency: wallet.currency,
     member_balances: balances,
     settlements,
   };

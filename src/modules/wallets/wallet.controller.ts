@@ -5,21 +5,21 @@ import { getAuthenticatedUserId } from '../../common/auth.middleware.js';
 import { getPageable } from '../../common/pageable.js';
 import { getRequiredParam } from '../../common/request.js';
 import {
-  addGroupMember,
-  createGroup,
-  getGroup,
-  getGroupSummary,
-  listGroupMembers,
-  listGroups,
-  requireGroupMember,
-} from './group.service.js';
+  addWalletMember,
+  createWallet,
+  getWallet,
+  getWalletSummary,
+  listWalletMembers,
+  listWallets,
+  requireWalletMember,
+} from './wallet.service.js';
 
-export async function getGroups(req: Request, res: Response) {
+export async function getWallets(req: Request, res: Response) {
   try {
     const userId = getAuthenticatedUserId(req);
-    const data = await listGroups(getPageable(req), userId);
+    const data = await listWallets(getPageable(req), userId);
 
-    return sendSuccess(res, 200, 'GROUP_LISTED', 'Groups fetched successfully', data);
+    return sendSuccess(res, 200, 'WALLET_LISTED', 'Wallets fetched successfully', data);
   } catch (error) {
     if (isAppError(error)) {
       return sendError(res, error.status, error.code, error.message);
@@ -29,11 +29,11 @@ export async function getGroups(req: Request, res: Response) {
   }
 }
 
-export async function postGroup(req: Request, res: Response) {
+export async function postWallet(req: Request, res: Response) {
   try {
-    const data = await createGroup(req.body, getAuthenticatedUserId(req));
+    const data = await createWallet(req.body, getAuthenticatedUserId(req));
 
-    return sendSuccess(res, 201, 'GROUP_CREATED', 'Group created successfully', data);
+    return sendSuccess(res, 201, 'WALLET_CREATED', 'Wallet created successfully', data);
   } catch (error) {
     if (isAppError(error)) {
       return sendError(res, error.status, error.code, error.message);
@@ -43,13 +43,13 @@ export async function postGroup(req: Request, res: Response) {
   }
 }
 
-export async function getGroupById(req: Request, res: Response) {
+export async function getWalletById(req: Request, res: Response) {
   try {
-    const groupId = getRequiredParam(req.params, 'groupId');
-    await requireGroupMember(groupId, getAuthenticatedUserId(req));
-    const data = await getGroup(groupId);
+    const walletId = getRequiredParam(req.params, 'walletId');
+    await requireWalletMember(walletId, getAuthenticatedUserId(req));
+    const data = await getWallet(walletId);
 
-    return sendSuccess(res, 200, 'GROUP_FETCHED', 'Group fetched successfully', data);
+    return sendSuccess(res, 200, 'WALLET_FETCHED', 'Wallet fetched successfully', data);
   } catch (error) {
     if (isAppError(error)) {
       return sendError(res, error.status, error.code, error.message);
@@ -59,11 +59,11 @@ export async function getGroupById(req: Request, res: Response) {
   }
 }
 
-export async function postGroupMember(req: Request, res: Response) {
+export async function postWalletMember(req: Request, res: Response) {
   try {
-    const groupId = getRequiredParam(req.params, 'groupId');
-    const data = await addGroupMember(
-      groupId,
+    const walletId = getRequiredParam(req.params, 'walletId');
+    const data = await addWalletMember(
+      walletId,
       req.body,
       getAuthenticatedUserId(req)
     );
@@ -71,8 +71,8 @@ export async function postGroupMember(req: Request, res: Response) {
     return sendSuccess(
       res,
       201,
-      'GROUP_MEMBER_CREATED',
-      'Group member created successfully',
+      'WALLET_MEMBER_CREATED',
+      'Wallet member created successfully',
       data
     );
   } catch (error) {
@@ -84,19 +84,19 @@ export async function postGroupMember(req: Request, res: Response) {
   }
 }
 
-export async function getGroupMembers(req: Request, res: Response) {
+export async function getWalletMembers(req: Request, res: Response) {
   try {
-    const groupId = getRequiredParam(req.params, 'groupId');
-    const data = await listGroupMembers(
-      groupId,
+    const walletId = getRequiredParam(req.params, 'walletId');
+    const data = await listWalletMembers(
+      walletId,
       getAuthenticatedUserId(req)
     );
 
     return sendSuccess(
       res,
       200,
-      'GROUP_MEMBER_LISTED',
-      'Group members fetched successfully',
+      'WALLET_MEMBER_LISTED',
+      'Wallet members fetched successfully',
       data
     );
   } catch (error) {
@@ -111,9 +111,9 @@ export async function getGroupMembers(req: Request, res: Response) {
 export async function getSummary(req: Request, res: Response) {
   try {
     const month = typeof req.query.month === 'string' ? req.query.month : undefined;
-    const groupId = getRequiredParam(req.params, 'groupId');
-    const data = await getGroupSummary(
-      groupId,
+    const walletId = getRequiredParam(req.params, 'walletId');
+    const data = await getWalletSummary(
+      walletId,
       month,
       getAuthenticatedUserId(req)
     );
@@ -121,8 +121,8 @@ export async function getSummary(req: Request, res: Response) {
     return sendSuccess(
       res,
       200,
-      'GROUP_SUMMARY_FETCHED',
-      'Group summary fetched successfully',
+      'WALLET_SUMMARY_FETCHED',
+      'Wallet summary fetched successfully',
       data
     );
   } catch (error) {

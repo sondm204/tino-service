@@ -3,22 +3,22 @@ export enum UserStatus {
   Inactive = 'inactive',
 }
 
-export enum GroupType {
+export enum WalletType {
   Personal = 'personal',
   Shared = 'shared',
 }
 
-export enum GroupCurrency {
+export enum WalletCurrency {
   VND = 'VND',
   USD = 'USD',
 }
 
-export enum GroupMemberRole {
+export enum WalletMemberRole {
   Owner = 'owner',
   Member = 'member',
 }
 
-export enum GroupMemberStatus {
+export enum WalletMemberStatus {
   Active = 'active',
   Inactive = 'inactive',
 }

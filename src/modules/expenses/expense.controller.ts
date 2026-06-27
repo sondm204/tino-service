@@ -21,9 +21,9 @@ function handleError(res: Response, error: unknown) {
 
 export async function getExpenses(req: Request, res: Response) {
   try {
-    const groupId = getRequiredParam(req.params, 'groupId');
+    const walletId = getRequiredParam(req.params, 'walletId');
     const data = await listExpenses(
-      groupId,
+      walletId,
       getPageable(req),
       getAuthenticatedUserId(req)
     );
@@ -36,9 +36,9 @@ export async function getExpenses(req: Request, res: Response) {
 
 export async function postExpense(req: Request, res: Response) {
   try {
-    const groupId = getRequiredParam(req.params, 'groupId');
+    const walletId = getRequiredParam(req.params, 'walletId');
     const data = await createExpense(
-      groupId,
+      walletId,
       req.body,
       getAuthenticatedUserId(req)
     );
@@ -51,10 +51,10 @@ export async function postExpense(req: Request, res: Response) {
 
 export async function patchExpense(req: Request, res: Response) {
   try {
-    const groupId = getRequiredParam(req.params, 'groupId');
+    const walletId = getRequiredParam(req.params, 'walletId');
     const expenseId = getRequiredParam(req.params, 'expenseId');
     const data = await updateExpense(
-      groupId,
+      walletId,
       expenseId,
       req.body,
       getAuthenticatedUserId(req)
@@ -68,10 +68,10 @@ export async function patchExpense(req: Request, res: Response) {
 
 export async function removeExpense(req: Request, res: Response) {
   try {
-    const groupId = getRequiredParam(req.params, 'groupId');
+    const walletId = getRequiredParam(req.params, 'walletId');
     const expenseId = getRequiredParam(req.params, 'expenseId');
     const data = await deleteExpense(
-      groupId,
+      walletId,
       expenseId,
       getAuthenticatedUserId(req)
     );
