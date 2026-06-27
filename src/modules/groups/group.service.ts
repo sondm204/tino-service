@@ -40,6 +40,16 @@ export type GroupMemberResponse = {
   joined_at: string;
 };
 
+export type GroupMemberWithUserResponse = GroupMemberResponse & {
+  user: {
+    id: string;
+    email: string;
+    display_name: string;
+    avatar_url: string | null;
+    status: string;
+  };
+};
+
 export type AddGroupMemberRequest = {
   user_id?: string;
   role?: string;
@@ -62,14 +72,20 @@ type ExpenseSplitRow = {
 };
 
 export async function listGroups(pageable: PageableRequest, userId?: string) {
+  if (!userId) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Authentication is required');
+  }
+
   return listGroupsWithTotals(pageable, userId);
 }
 
-export async function listGroupsWithTotals(pageable: PageableRequest, userId?: string) {
+export async function listGroupsWithTotals(pageable: PageableRequest, userId: string) {
   const { from, to } = toSupabaseRange(pageable);
   const { data, error, count } = await supabase
     .from('groups')
-    .select('*', { count: 'exact' })
+    .select('*, group_members!inner(user_id, status)', { count: 'exact' })
+    .eq('group_members.user_id', userId)
+    .eq('group_members.status', GroupMemberStatus.Active)
     .order('created_at', { ascending: false })
     .range(from, to);
 
@@ -77,7 +93,13 @@ export async function listGroupsWithTotals(pageable: PageableRequest, userId?: s
     throw new AppError(400, 'GROUP_LIST_FAILED', error.message);
   }
 
-  const groups = (data ?? []) as GroupResponse[];
+  const groups = (data ?? []).map((row) => {
+    const {
+      group_members: _groupMembers,
+      ...group
+    } = row as GroupResponse & { group_members: unknown };
+    return group;
+  });
   const groupIds = groups.map((group) => group.id);
 
   if (groupIds.length === 0) {
@@ -144,10 +166,6 @@ export async function listGroupsWithTotals(pageable: PageableRequest, userId?: s
     const amount = Number(expense.total_amount);
     totalsByGroup.set(expense.group_id, (totalsByGroup.get(expense.group_id) ?? 0) + amount);
 
-    if (!userId) {
-      continue;
-    }
-
     const splits = splitsByExpense.get(expense.id) ?? [];
     const userSplit = splits.find((split) => split.user_id === userId);
     let userShare = 0;
@@ -193,19 +211,81 @@ export async function getGroup(groupId: string) {
   return data as GroupResponse;
 }
 
-export async function createGroup(payload: CreateGroupRequest) {
+export async function requireGroupMember(groupId: string, userId: string) {
+  const { data, error } = await supabase
+    .from('group_members')
+    .select('id, group_id, user_id, role, status, joined_at')
+    .eq('group_id', groupId)
+    .eq('user_id', userId)
+    .eq('status', GroupMemberStatus.Active)
+    .single();
+
+  if (error || !data) {
+    throw new AppError(
+      403,
+      'GROUP_ACCESS_DENIED',
+      'You are not an active member of this group'
+    );
+  }
+
+  return data as GroupMemberResponse;
+}
+
+export async function requireGroupOwner(groupId: string, userId: string) {
+  const member = await requireGroupMember(groupId, userId);
+
+  if (member.role !== GroupMemberRole.Owner) {
+    throw new AppError(
+      403,
+      'GROUP_OWNER_REQUIRED',
+      'Only the group owner can perform this action'
+    );
+  }
+
+  return member;
+}
+
+export async function listGroupMembers(groupId: string, actorUserId: string) {
+  await requireGroupMember(groupId, actorUserId);
+
+  const { data, error } = await supabase
+    .from('group_members')
+    .select(
+      `
+        id,
+        group_id,
+        user_id,
+        role,
+        status,
+        joined_at,
+        user:users!group_members_user_id_fkey (
+          id,
+          email,
+          display_name,
+          avatar_url,
+          status
+        )
+      `
+    )
+    .eq('group_id', groupId)
+    .eq('status', GroupMemberStatus.Active)
+    .order('joined_at', { ascending: true });
+
+  if (error) {
+    throw new AppError(400, 'GROUP_MEMBER_LIST_FAILED', error.message);
+  }
+
+  return (data ?? []) as unknown as GroupMemberWithUserResponse[];
+}
+
+export async function createGroup(payload: CreateGroupRequest, ownerId: string) {
   const name = payload.name?.trim();
   const description = payload.description?.trim() || null;
   const type = payload.type?.trim() || GroupType.Personal;
   const currency = payload.currency?.trim().toUpperCase() || GroupCurrency.VND;
-  const ownerId = payload.owner_id?.trim();
 
   if (!name) {
     throw new AppError(400, 'VALIDATION_ERROR', 'Group name is required');
-  }
-
-  if (!ownerId) {
-    throw new AppError(400, 'VALIDATION_ERROR', 'owner_id is required');
   }
 
   if (!isEnumValue(GroupType, type)) {
@@ -255,7 +335,11 @@ export async function createGroup(payload: CreateGroupRequest) {
   };
 }
 
-export async function addGroupMember(groupId: string, payload: AddGroupMemberRequest) {
+export async function addGroupMember(
+  groupId: string,
+  payload: AddGroupMemberRequest,
+  actorUserId: string
+) {
   const userId = payload.user_id?.trim();
   const role = payload.role?.trim() || GroupMemberRole.Member;
   const status = payload.status?.trim() || GroupMemberStatus.Active;
@@ -272,7 +356,7 @@ export async function addGroupMember(groupId: string, payload: AddGroupMemberReq
     throw new AppError(400, 'VALIDATION_ERROR', 'status is invalid');
   }
 
-  await getGroup(groupId);
+  await requireGroupOwner(groupId, actorUserId);
 
   const { data, error } = await supabase
     .from('group_members')
@@ -292,7 +376,12 @@ export async function addGroupMember(groupId: string, payload: AddGroupMemberReq
   return data as GroupMemberResponse;
 }
 
-export async function getGroupSummary(groupId: string, month?: string) {
+export async function getGroupSummary(
+  groupId: string,
+  month: string | undefined,
+  userId: string
+) {
+  await requireGroupMember(groupId, userId);
   const targetMonth = month || new Date().toISOString().slice(0, 7);
 
   if (!/^\d{4}-\d{2}$/.test(targetMonth)) {

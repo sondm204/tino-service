@@ -1,7 +1,14 @@
 import type { Request, Response } from 'express';
 import { isAppError } from '../../common/app-error.js';
 import { sendError, sendSuccess } from '../../common/api-response.js';
-import { getCurrentUser, login, register } from './auth.service.js';
+import { getAuthenticatedUserId } from '../../common/auth.middleware.js';
+import {
+  getCurrentUser,
+  login,
+  logout,
+  refreshSession,
+  register,
+} from './auth.service.js';
 
 function handleError(res: Response, error: unknown) {
   if (isAppError(error)) {
@@ -31,15 +38,35 @@ export async function postLogin(req: Request, res: Response) {
   }
 }
 
-export async function postLogout(_req: Request, res: Response) {
-  return sendSuccess(res, 200, 'AUTH_LOGGED_OUT', 'Logged out successfully', {
-    revoked: false,
-  });
+export async function postRefresh(req: Request, res: Response) {
+  try {
+    const data = await refreshSession(req.body);
+
+    return sendSuccess(
+      res,
+      200,
+      'AUTH_REFRESHED',
+      'Session refreshed successfully',
+      data
+    );
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+export async function postLogout(req: Request, res: Response) {
+  try {
+    const data = await logout(req.body);
+
+    return sendSuccess(res, 200, 'AUTH_LOGGED_OUT', 'Logged out successfully', data);
+  } catch (error) {
+    return handleError(res, error);
+  }
 }
 
 export async function getMe(req: Request, res: Response) {
   try {
-    const data = await getCurrentUser(req.headers.authorization);
+    const data = await getCurrentUser(getAuthenticatedUserId(req));
 
     return sendSuccess(res, 200, 'AUTH_ME', 'Current user fetched successfully', data);
   } catch (error) {

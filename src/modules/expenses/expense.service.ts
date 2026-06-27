@@ -1,8 +1,14 @@
 import { AppError } from '../../common/app-error.js';
-import { ExpenseSplitMethod, GroupCurrency, isEnumValue } from '../../common/enums.js';
+import {
+  ExpenseSplitMethod,
+  GroupCurrency,
+  GroupMemberRole,
+  isEnumValue,
+} from '../../common/enums.js';
 import type { PageableRequest } from '../../common/pageable.js';
 import { toPageableResponse, toSupabaseRange } from '../../common/pageable.js';
 import { supabase } from '../../db/supabase.js';
+import { requireGroupMember } from '../groups/group.service.js';
 
 export type ExpenseSplitRequest = {
   user_id?: string;
@@ -67,19 +73,75 @@ function validateSplitMethod(splitMethod: string) {
   }
 }
 
-async function ensureGroupExists(groupId: string) {
-  const { data, error } = await supabase
-    .from('groups')
-    .select('id')
-    .eq('id', groupId)
-    .single();
+async function ensureActiveGroupUsers(groupId: string, userIds: string[]) {
+  const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
 
-  if (error || !data) {
-    throw new AppError(404, 'GROUP_NOT_FOUND', 'Group not found');
+  if (uniqueUserIds.length === 0) {
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from('group_members')
+    .select('user_id')
+    .eq('group_id', groupId)
+    .eq('status', 'active')
+    .in('user_id', uniqueUserIds);
+
+  if (error) {
+    throw new AppError(400, 'GROUP_MEMBER_LIST_FAILED', error.message);
+  }
+
+  const activeUserIds = new Set((data ?? []).map((member) => member.user_id as string));
+
+  if (uniqueUserIds.some((userId) => !activeUserIds.has(userId))) {
+    throw new AppError(
+      400,
+      'INVALID_EXPENSE_MEMBER',
+      'Payer and split users must be active group members'
+    );
   }
 }
 
-export async function listExpenses(groupId: string, pageable: PageableRequest) {
+async function ensureCanManageExpense(
+  groupId: string,
+  expenseId: string,
+  userId: string
+) {
+  const [member, expenseResult] = await Promise.all([
+    requireGroupMember(groupId, userId),
+    supabase
+      .from('expenses')
+      .select('id, created_by_user_id')
+      .eq('id', expenseId)
+      .eq('group_id', groupId)
+      .is('deleted_at', null)
+      .single(),
+  ]);
+
+  const { data: expense, error } = expenseResult;
+
+  if (error || !expense) {
+    throw new AppError(404, 'EXPENSE_NOT_FOUND', 'Expense not found');
+  }
+
+  if (
+    member.role !== GroupMemberRole.Owner &&
+    expense.created_by_user_id !== userId
+  ) {
+    throw new AppError(
+      403,
+      'EXPENSE_ACCESS_DENIED',
+      'Only the group owner or expense creator can modify this expense'
+    );
+  }
+}
+
+export async function listExpenses(
+  groupId: string,
+  pageable: PageableRequest,
+  userId: string
+) {
+  await requireGroupMember(groupId, userId);
   const { from, to } = toSupabaseRange(pageable);
   const { data, error, count } = await supabase
     .from('expenses')
@@ -105,14 +167,17 @@ export async function listExpenses(groupId: string, pageable: PageableRequest) {
   return toPageableResponse(expensesWithSplits, pageable, count ?? 0);
 }
 
-export async function createExpense(groupId: string, payload: CreateExpenseRequest) {
-  await ensureGroupExists(groupId);
+export async function createExpense(
+  groupId: string,
+  payload: CreateExpenseRequest,
+  actorUserId: string
+) {
+  await requireGroupMember(groupId, actorUserId);
 
   const title = payload.title?.trim();
   const totalAmount = Number(payload.total_amount);
   const currency = payload.currency?.trim().toUpperCase() || GroupCurrency.VND;
   const paidByUserId = payload.paid_by_user_id?.trim();
-  const createdByUserId = payload.created_by_user_id?.trim();
   const splitMethod = payload.split_method?.trim() || ExpenseSplitMethod.Equal;
   const expenseDate = payload.expense_date?.trim() || new Date().toISOString().slice(0, 10);
 
@@ -128,12 +193,12 @@ export async function createExpense(groupId: string, payload: CreateExpenseReque
     throw new AppError(400, 'VALIDATION_ERROR', 'paid_by_user_id is required');
   }
 
-  if (!createdByUserId) {
-    throw new AppError(400, 'VALIDATION_ERROR', 'created_by_user_id is required');
-  }
-
   validateCurrency(currency);
   validateSplitMethod(splitMethod);
+  await ensureActiveGroupUsers(groupId, [
+    paidByUserId,
+    ...(payload.splits ?? []).map((split) => split.user_id ?? ''),
+  ]);
 
   const { data: expense, error } = await supabase
     .from('expenses')
@@ -145,7 +210,7 @@ export async function createExpense(groupId: string, payload: CreateExpenseReque
       total_amount: totalAmount,
       currency,
       paid_by_user_id: paidByUserId,
-      created_by_user_id: createdByUserId,
+      created_by_user_id: actorUserId,
       expense_date: expenseDate,
       split_method: splitMethod,
     })
@@ -185,8 +250,10 @@ export async function createExpense(groupId: string, payload: CreateExpenseReque
 export async function updateExpense(
   groupId: string,
   expenseId: string,
-  payload: UpdateExpenseRequest
+  payload: UpdateExpenseRequest,
+  actorUserId: string
 ) {
+  await ensureCanManageExpense(groupId, expenseId, actorUserId);
   const updates: Record<string, unknown> = {};
 
   if (payload.category_id !== undefined) {
@@ -215,10 +282,8 @@ export async function updateExpense(
     updates.currency = currency;
   }
   if (payload.paid_by_user_id !== undefined) {
+    await ensureActiveGroupUsers(groupId, [payload.paid_by_user_id]);
     updates.paid_by_user_id = payload.paid_by_user_id;
-  }
-  if (payload.created_by_user_id !== undefined) {
-    updates.created_by_user_id = payload.created_by_user_id;
   }
   if (payload.expense_date !== undefined) {
     updates.expense_date = payload.expense_date;
@@ -243,6 +308,10 @@ export async function updateExpense(
   }
 
   if (payload.splits) {
+    await ensureActiveGroupUsers(
+      groupId,
+      payload.splits.map((split) => split.user_id ?? '')
+    );
     await supabase.from('expense_splits').delete().eq('expense_id', expenseId);
 
     if (payload.splits.length > 0) {
@@ -264,7 +333,12 @@ export async function updateExpense(
   return data as ExpenseResponse;
 }
 
-export async function deleteExpense(groupId: string, expenseId: string) {
+export async function deleteExpense(
+  groupId: string,
+  expenseId: string,
+  actorUserId: string
+) {
+  await ensureCanManageExpense(groupId, expenseId, actorUserId);
   const { data, error } = await supabase
     .from('expenses')
     .update({ deleted_at: new Date().toISOString() })

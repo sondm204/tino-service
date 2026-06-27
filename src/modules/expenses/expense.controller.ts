@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { isAppError } from '../../common/app-error.js';
 import { sendError, sendSuccess } from '../../common/api-response.js';
+import { getAuthenticatedUserId } from '../../common/auth.middleware.js';
 import { getPageable } from '../../common/pageable.js';
 import { getRequiredParam } from '../../common/request.js';
 import {
@@ -21,7 +22,11 @@ function handleError(res: Response, error: unknown) {
 export async function getExpenses(req: Request, res: Response) {
   try {
     const groupId = getRequiredParam(req.params, 'groupId');
-    const data = await listExpenses(groupId, getPageable(req));
+    const data = await listExpenses(
+      groupId,
+      getPageable(req),
+      getAuthenticatedUserId(req)
+    );
 
     return sendSuccess(res, 200, 'EXPENSE_LISTED', 'Expenses fetched successfully', data);
   } catch (error) {
@@ -32,7 +37,11 @@ export async function getExpenses(req: Request, res: Response) {
 export async function postExpense(req: Request, res: Response) {
   try {
     const groupId = getRequiredParam(req.params, 'groupId');
-    const data = await createExpense(groupId, req.body);
+    const data = await createExpense(
+      groupId,
+      req.body,
+      getAuthenticatedUserId(req)
+    );
 
     return sendSuccess(res, 201, 'EXPENSE_CREATED', 'Expense created successfully', data);
   } catch (error) {
@@ -44,7 +53,12 @@ export async function patchExpense(req: Request, res: Response) {
   try {
     const groupId = getRequiredParam(req.params, 'groupId');
     const expenseId = getRequiredParam(req.params, 'expenseId');
-    const data = await updateExpense(groupId, expenseId, req.body);
+    const data = await updateExpense(
+      groupId,
+      expenseId,
+      req.body,
+      getAuthenticatedUserId(req)
+    );
 
     return sendSuccess(res, 200, 'EXPENSE_UPDATED', 'Expense updated successfully', data);
   } catch (error) {
@@ -56,7 +70,11 @@ export async function removeExpense(req: Request, res: Response) {
   try {
     const groupId = getRequiredParam(req.params, 'groupId');
     const expenseId = getRequiredParam(req.params, 'expenseId');
-    const data = await deleteExpense(groupId, expenseId);
+    const data = await deleteExpense(
+      groupId,
+      expenseId,
+      getAuthenticatedUserId(req)
+    );
 
     return sendSuccess(res, 200, 'EXPENSE_DELETED', 'Expense deleted successfully', data);
   } catch (error) {
