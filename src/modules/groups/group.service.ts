@@ -53,6 +53,8 @@ type ExpenseRow = {
   paid_by_user_id: string;
 };
 
+type SummaryExpenseRow = Omit<ExpenseRow, 'group_id'>;
+
 type ExpenseSplitRow = {
   expense_id: string;
   user_id: string;
@@ -82,21 +84,26 @@ export async function listGroupsWithTotals(pageable: PageableRequest, userId?: s
     return toPageableResponse(groups, pageable, count ?? 0);
   }
 
-  const { data: expenses, error: expensesError } = await supabase
-    .from('expenses')
-    .select('id, group_id, total_amount, paid_by_user_id')
-    .in('group_id', groupIds)
-    .is('deleted_at', null);
+  const [expensesResult, membersResult] = await Promise.all([
+    supabase
+      .from('expenses')
+      .select('id, group_id, total_amount, paid_by_user_id')
+      .in('group_id', groupIds)
+      .is('deleted_at', null),
+    supabase
+      .from('group_members')
+      .select('*')
+      .in('group_id', groupIds)
+      .eq('status', GroupMemberStatus.Active),
+  ]);
+
+  const { data: expenses, error: expensesError } = expensesResult;
 
   if (expensesError) {
     throw new AppError(400, 'EXPENSE_LIST_FAILED', expensesError.message);
   }
 
-  const { data: members, error: membersError } = await supabase
-    .from('group_members')
-    .select('*')
-    .in('group_id', groupIds)
-    .eq('status', GroupMemberStatus.Active);
+  const { data: members, error: membersError } = membersResult;
 
   if (membersError) {
     throw new AppError(400, 'GROUP_MEMBER_LIST_FAILED', membersError.message);
@@ -286,7 +293,6 @@ export async function addGroupMember(groupId: string, payload: AddGroupMemberReq
 }
 
 export async function getGroupSummary(groupId: string, month?: string) {
-  const group = await getGroup(groupId);
   const targetMonth = month || new Date().toISOString().slice(0, 7);
 
   if (!/^\d{4}-\d{2}$/.test(targetMonth)) {
@@ -298,31 +304,36 @@ export async function getGroupSummary(groupId: string, month?: string) {
   periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
   const periodEndDate = periodEnd.toISOString().slice(0, 10);
 
-  const { data: members, error: membersError } = await supabase
-    .from('group_members')
-    .select('*')
-    .eq('group_id', groupId)
-    .eq('status', GroupMemberStatus.Active);
+  const [group, membersResult, expensesResult] = await Promise.all([
+    getGroup(groupId),
+    supabase
+      .from('group_members')
+      .select('*')
+      .eq('group_id', groupId)
+      .eq('status', GroupMemberStatus.Active),
+    supabase
+      .from('expenses')
+      .select('id, total_amount, paid_by_user_id')
+      .eq('group_id', groupId)
+      .gte('expense_date', periodStart)
+      .lt('expense_date', periodEndDate)
+      .is('deleted_at', null),
+  ]);
+
+  const { data: members, error: membersError } = membersResult;
 
   if (membersError) {
     throw new AppError(400, 'GROUP_MEMBER_LIST_FAILED', membersError.message);
   }
 
   const activeMembers = (members ?? []) as GroupMemberResponse[];
-
-  const { data: expenses, error: expensesError } = await supabase
-    .from('expenses')
-    .select('id, total_amount, paid_by_user_id')
-    .eq('group_id', groupId)
-    .gte('expense_date', periodStart)
-    .lt('expense_date', periodEndDate)
-    .is('deleted_at', null);
+  const { data: expenses, error: expensesError } = expensesResult;
 
   if (expensesError) {
     throw new AppError(400, 'EXPENSE_LIST_FAILED', expensesError.message);
   }
 
-  const expenseRows = (expenses ?? []) as ExpenseRow[];
+  const expenseRows = (expenses ?? []) as SummaryExpenseRow[];
   const expenseIds = expenseRows.map((expense) => expense.id);
   const splitsByExpense = new Map<string, ExpenseSplitRow[]>();
 

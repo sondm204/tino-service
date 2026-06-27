@@ -13,10 +13,24 @@ type UserWithPassword = UserResponse & {
   password: string;
 };
 
+const CURRENT_USER_CACHE_TTL_MS = 60_000;
+const currentUserCache = new Map<
+  string,
+  { expiresAt: number; user: UserResponse }
+>();
+
+function cacheCurrentUser(user: UserResponse) {
+  currentUserCache.set(user.id, {
+    expiresAt: Date.now() + CURRENT_USER_CACHE_TTL_MS,
+    user,
+  });
+}
+
 export async function register(payload: CreateUserRequest) {
   const user = await createUser(payload);
   const token = createAuthToken(user.id);
 
+  cacheCurrentUser(user);
   return { user, token };
 }
 
@@ -48,6 +62,7 @@ export async function login(payload: LoginRequest) {
   const { password: _password, ...safeUser } = user;
   const token = createAuthToken(user.id);
 
+  cacheCurrentUser(safeUser);
   return { user: safeUser, token };
 }
 
@@ -64,6 +79,16 @@ export async function getCurrentUser(authorizationHeader?: string) {
     throw new AppError(401, 'UNAUTHORIZED', 'Invalid or expired token');
   }
 
+  const cached = currentUserCache.get(payload.user_id);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.user;
+  }
+
+  if (cached) {
+    currentUserCache.delete(payload.user_id);
+  }
+
   const { data, error } = await supabase
     .from('users')
     .select('id, email, display_name, avatar_url, status, created_at, updated_at')
@@ -74,5 +99,7 @@ export async function getCurrentUser(authorizationHeader?: string) {
     throw new AppError(401, 'UNAUTHORIZED', 'User not found');
   }
 
-  return data as UserResponse;
+  const user = data as UserResponse;
+  cacheCurrentUser(user);
+  return user;
 }

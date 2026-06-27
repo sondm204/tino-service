@@ -51,6 +51,10 @@ export type ExpenseSplitResponse = {
   shares: number | string | null;
 };
 
+type ExpenseWithSplitsRow = ExpenseResponse & {
+  expense_splits?: ExpenseSplitResponse[];
+};
+
 function validateCurrency(currency: string) {
   if (!isEnumValue(GroupCurrency, currency)) {
     throw new AppError(400, 'VALIDATION_ERROR', 'currency is invalid');
@@ -79,7 +83,9 @@ export async function listExpenses(groupId: string, pageable: PageableRequest) {
   const { from, to } = toSupabaseRange(pageable);
   const { data, error, count } = await supabase
     .from('expenses')
-    .select('*', { count: 'exact' })
+    .select('*, expense_splits(user_id, amount, percentage, shares)', {
+      count: 'exact',
+    })
     .eq('group_id', groupId)
     .is('deleted_at', null)
     .order('expense_date', { ascending: false })
@@ -89,37 +95,12 @@ export async function listExpenses(groupId: string, pageable: PageableRequest) {
     throw new AppError(400, 'EXPENSE_LIST_FAILED', error.message);
   }
 
-  const expenses = (data ?? []) as ExpenseResponse[];
-  const expenseIds = expenses.map((expense) => expense.id);
-  const splitsByExpense = new Map<string, ExpenseSplitResponse[]>();
-
-  if (expenseIds.length > 0) {
-    const { data: splits, error: splitsError } = await supabase
-      .from('expense_splits')
-      .select('expense_id, user_id, amount, percentage, shares')
-      .in('expense_id', expenseIds);
-
-    if (splitsError) {
-      throw new AppError(400, 'EXPENSE_SPLIT_LIST_FAILED', splitsError.message);
-    }
-
-    for (const split of splits ?? []) {
-      const row = split as ExpenseSplitResponse & { expense_id: string };
-      const current = splitsByExpense.get(row.expense_id) ?? [];
-      current.push({
-        user_id: row.user_id,
-        amount: row.amount,
-        percentage: row.percentage,
-        shares: row.shares,
-      });
-      splitsByExpense.set(row.expense_id, current);
-    }
-  }
-
-  const expensesWithSplits = expenses.map((expense) => ({
-    ...expense,
-    splits: splitsByExpense.get(expense.id) ?? [],
-  }));
+  const expensesWithSplits = ((data ?? []) as ExpenseWithSplitsRow[]).map(
+    ({ expense_splits, ...expense }) => ({
+      ...expense,
+      splits: expense_splits ?? [],
+    })
+  );
 
   return toPageableResponse(expensesWithSplits, pageable, count ?? 0);
 }
