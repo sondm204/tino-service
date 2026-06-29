@@ -23,14 +23,17 @@
   },
   "type": "module",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
     "@supabase/supabase-js": "^2.108.2",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "multer": "^2.2.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
     "@types/node": "^26.0.0",
     "supabase": "^2.108.0",
     "tsx": "^4.22.4",
