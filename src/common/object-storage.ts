@@ -79,7 +79,13 @@ export async function uploadUserAvatar(
         CacheControl: 'public, max-age=31536000, immutable',
       })
     );
-  } catch {
+  } catch (error) {
+    console.error('S3 avatar upload failed', {
+      bucket: config.bucket,
+      endpoint: config.endpoint || 'AWS default',
+      error: error instanceof Error ? error.message : String(error),
+      region: config.region,
+    });
     throw new AppError(502, 'AVATAR_UPLOAD_FAILED', 'Could not upload avatar');
   }
 

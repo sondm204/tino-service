@@ -139,18 +139,36 @@ async function ensureCanManageExpense(
 export async function listExpenses(
   walletId: string,
   pageable: PageableRequest,
-  userId: string
+  userId: string,
+  month?: string
 ) {
   await requireWalletMember(walletId, userId);
   const { from, to } = toSupabaseRange(pageable);
-  const { data, error, count } = await supabase
+  let query = supabase
     .from('expenses')
     .select('*, expense_splits(user_id, amount, percentage, shares)', {
       count: 'exact',
     })
     .eq('wallet_id', walletId)
-    .is('deleted_at', null)
+    .is('deleted_at', null);
+
+  if (month !== undefined) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+      throw new AppError(400, 'VALIDATION_ERROR', 'month must use YYYY-MM format');
+    }
+
+    const [year, monthNumber] = month.split('-').map(Number);
+    const periodStart = `${month}-01`;
+    const periodEnd = new Date(Date.UTC(year, monthNumber, 1))
+      .toISOString()
+      .slice(0, 10);
+
+    query = query.gte('expense_date', periodStart).lt('expense_date', periodEnd);
+  }
+
+  const { data, error, count } = await query
     .order('expense_date', { ascending: false })
+    .order('created_at', { ascending: false })
     .range(from, to);
 
   if (error) {

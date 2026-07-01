@@ -22,10 +22,12 @@ function handleError(res: Response, error: unknown) {
 export async function getExpenses(req: Request, res: Response) {
   try {
     const walletId = getRequiredParam(req.params, 'walletId');
+    const month = typeof req.query.month === 'string' ? req.query.month : undefined;
     const data = await listExpenses(
       walletId,
       getPageable(req),
-      getAuthenticatedUserId(req)
+      getAuthenticatedUserId(req),
+      month
     );
 
     return sendSuccess(res, 200, 'EXPENSE_LISTED', 'Expenses fetched successfully', data);
