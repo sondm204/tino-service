@@ -5,7 +5,9 @@ import { getAuthenticatedUserId } from '../../common/auth.middleware.js';
 import { getPageable } from '../../common/pageable.js';
 import { getRequiredParam } from '../../common/request.js';
 import {
+  createExpenseAttachment,
   createExpense,
+  deleteExpenseAttachment,
   deleteExpense,
   listExpenses,
   updateExpense,
@@ -79,6 +81,57 @@ export async function removeExpense(req: Request, res: Response) {
     );
 
     return sendSuccess(res, 200, 'EXPENSE_DELETED', 'Expense deleted successfully', data);
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+export async function postExpenseAttachment(req: Request, res: Response) {
+  try {
+    if (!req.file) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'attachment file is required');
+    }
+
+    const walletId = getRequiredParam(req.params, 'walletId');
+    const expenseId = getRequiredParam(req.params, 'expenseId');
+    const data = await createExpenseAttachment(
+      walletId,
+      expenseId,
+      getAuthenticatedUserId(req),
+      req.file
+    );
+
+    return sendSuccess(
+      res,
+      201,
+      'ATTACHMENT_CREATED',
+      'Attachment uploaded successfully',
+      data
+    );
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+export async function removeExpenseAttachment(req: Request, res: Response) {
+  try {
+    const walletId = getRequiredParam(req.params, 'walletId');
+    const expenseId = getRequiredParam(req.params, 'expenseId');
+    const attachmentId = getRequiredParam(req.params, 'attachmentId');
+    const data = await deleteExpenseAttachment(
+      walletId,
+      expenseId,
+      attachmentId,
+      getAuthenticatedUserId(req)
+    );
+
+    return sendSuccess(
+      res,
+      200,
+      'ATTACHMENT_DELETED',
+      'Attachment deleted successfully',
+      data
+    );
   } catch (error) {
     return handleError(res, error);
   }

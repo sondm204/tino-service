@@ -34,9 +34,9 @@ app.use(
     if (error instanceof multer.MulterError) {
       const message =
         error.code === 'LIMIT_FILE_SIZE'
-          ? 'Avatar must not exceed 5 MB'
+          ? 'Uploaded file exceeds the allowed size limit'
           : error.message;
-      return sendError(res, 400, 'AVATAR_UPLOAD_INVALID', message);
+      return sendError(res, 400, 'FILE_UPLOAD_INVALID', message);
     }
 
     return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Internal server error');

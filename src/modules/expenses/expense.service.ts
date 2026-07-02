@@ -7,6 +7,10 @@ import {
 } from '../../common/enums.js';
 import type { PageableRequest } from '../../common/pageable.js';
 import { toPageableResponse, toSupabaseRange } from '../../common/pageable.js';
+import {
+  deleteObject,
+  uploadExpenseAttachment,
+} from '../../common/object-storage.js';
 import { supabase } from '../../db/supabase.js';
 import { requireWalletMember } from '../wallets/wallet.service.js';
 
@@ -48,6 +52,19 @@ export type ExpenseResponse = {
   updated_at: string | null;
   deleted_at: string | null;
   splits?: ExpenseSplitResponse[];
+  attachments?: AttachmentResponse[];
+};
+
+export type AttachmentResponse = {
+  id: string;
+  expense_id: string;
+  file_url: string;
+  file_path: string;
+  file_name: string;
+  file_type: string | null;
+  file_size: number | null;
+  uploaded_by_user_id: string;
+  created_at: string;
 };
 
 export type ExpenseSplitResponse = {
@@ -59,6 +76,7 @@ export type ExpenseSplitResponse = {
 
 type ExpenseWithSplitsRow = ExpenseResponse & {
   expense_splits?: ExpenseSplitResponse[];
+  attachments?: AttachmentResponse[];
 };
 
 function validateCurrency(currency: string) {
@@ -146,9 +164,10 @@ export async function listExpenses(
   const { from, to } = toSupabaseRange(pageable);
   let query = supabase
     .from('expenses')
-    .select('*, expense_splits(user_id, amount, percentage, shares)', {
-      count: 'exact',
-    })
+    .select(
+      '*, expense_splits(user_id, amount, percentage, shares), attachments(id, expense_id, file_url, file_path, file_name, file_type, file_size, uploaded_by_user_id, created_at)',
+      { count: 'exact' }
+    )
     .eq('wallet_id', walletId)
     .is('deleted_at', null);
 
@@ -176,9 +195,10 @@ export async function listExpenses(
   }
 
   const expensesWithSplits = ((data ?? []) as ExpenseWithSplitsRow[]).map(
-    ({ expense_splits, ...expense }) => ({
+    ({ expense_splits, attachments, ...expense }) => ({
       ...expense,
       splits: expense_splits ?? [],
+      attachments: attachments ?? [],
     })
   );
 
@@ -371,4 +391,70 @@ export async function deleteExpense(
   }
 
   return { id: expenseId };
+}
+
+export async function createExpenseAttachment(
+  walletId: string,
+  expenseId: string,
+  actorUserId: string,
+  file: Express.Multer.File
+) {
+  await ensureCanManageExpense(walletId, expenseId, actorUserId);
+  const uploaded = await uploadExpenseAttachment(walletId, expenseId, file);
+  const { data, error } = await supabase
+    .from('attachments')
+    .insert({
+      expense_id: expenseId,
+      file_url: uploaded.url,
+      file_path: uploaded.key,
+      file_name: file.originalname,
+      file_type: file.mimetype,
+      file_size: file.size,
+      uploaded_by_user_id: actorUserId,
+    })
+    .select('*')
+    .single();
+
+  if (error || !data) {
+    try {
+      await deleteObject(uploaded.key);
+    } catch {
+      // Keep the database error as the primary failure.
+    }
+    throw new AppError(400, 'ATTACHMENT_CREATE_FAILED', error?.message || 'Attachment create failed');
+  }
+
+  return data as AttachmentResponse;
+}
+
+export async function deleteExpenseAttachment(
+  walletId: string,
+  expenseId: string,
+  attachmentId: string,
+  actorUserId: string
+) {
+  await ensureCanManageExpense(walletId, expenseId, actorUserId);
+  const { data: attachment, error: findError } = await supabase
+    .from('attachments')
+    .select('id, file_path')
+    .eq('id', attachmentId)
+    .eq('expense_id', expenseId)
+    .single();
+
+  if (findError || !attachment) {
+    throw new AppError(404, 'ATTACHMENT_NOT_FOUND', 'Attachment not found');
+  }
+
+  const { error: deleteError } = await supabase
+    .from('attachments')
+    .delete()
+    .eq('id', attachmentId)
+    .eq('expense_id', expenseId);
+
+  if (deleteError) {
+    throw new AppError(400, 'ATTACHMENT_DELETE_FAILED', deleteError.message);
+  }
+
+  await deleteObject(attachment.file_path as string);
+  return { id: attachmentId };
 }

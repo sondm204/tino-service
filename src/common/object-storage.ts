@@ -1,4 +1,4 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import { AppError } from './app-error.js';
@@ -93,4 +93,74 @@ export async function uploadUserAvatar(
     key,
     url: getPublicUrl(key, config),
   };
+}
+
+export async function uploadExpenseAttachment(
+  walletId: string,
+  expenseId: string,
+  file: Express.Multer.File
+) {
+  const config = getStorageConfig();
+  const extension = extname(file.originalname).toLowerCase();
+  const safeExtension = extension && extension.length <= 6 ? extension : '';
+  const key = `wallets/${walletId}/expenses/${expenseId}/${randomUUID()}${safeExtension}`;
+  const client = new S3Client({
+    region: config.region,
+    endpoint: config.endpoint,
+    forcePathStyle: config.forcePathStyle,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+  });
+
+  try {
+    await client.send(
+      new PutObjectCommand({
+        Bucket: config.bucket,
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+        CacheControl: 'public, max-age=31536000, immutable',
+      })
+    );
+  } catch (error) {
+    console.error('S3 expense attachment upload failed', {
+      bucket: config.bucket,
+      error: error instanceof Error ? error.message : String(error),
+      key,
+      region: config.region,
+    });
+    throw new AppError(502, 'ATTACHMENT_UPLOAD_FAILED', 'Could not upload attachment');
+  }
+
+  return { key, url: getPublicUrl(key, config) };
+}
+
+export async function deleteObject(key: string) {
+  const config = getStorageConfig();
+  const client = new S3Client({
+    region: config.region,
+    endpoint: config.endpoint,
+    forcePathStyle: config.forcePathStyle,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+  });
+
+  try {
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: config.bucket,
+        Key: key,
+      })
+    );
+  } catch (error) {
+    console.error('S3 object deletion failed', {
+      error: error instanceof Error ? error.message : String(error),
+      key,
+    });
+    throw new AppError(502, 'OBJECT_DELETE_FAILED', 'Could not delete stored object');
+  }
 }
