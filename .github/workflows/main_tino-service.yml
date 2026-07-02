@@ -49,7 +49,7 @@ jobs:
         run: pnpm build
 
       - name: Test
-        run: pnpm run test --if-present
+        run: pnpm run --if-present test
 
       - name: Remove development dependencies
         if: github.event_name != 'pull_request'
