@@ -1,53 +1,99 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-
-name: Build and deploy Node.js app to Azure Web App - Tino-service
+name: Tino Service CI/CD
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: tino-service-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AZURE_WEBAPP_NAME: Tino-service
+  NODE_VERSION: "22.x"
+  PNPM_VERSION: "11.9.0"
+
 jobs:
   build:
+    name: Build and verify
     runs-on: ubuntu-latest
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Set up Node.js version
-        uses: actions/setup-node@v3
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
         with:
-          node-version: '22.x'
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
 
-      - name: npm install, build, and test
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm run test --if-present
+
+      - name: Remove development dependencies
+        if: github.event_name != 'pull_request'
+        run: pnpm prune --prod
+
+      - name: Create deployment package
+        if: github.event_name != 'pull_request'
         run: |
-          npm install
-          npm run build --if-present
-          npm run test --if-present
+          mkdir -p release
+          cp -R dist node_modules package.json pnpm-lock.yaml release/
+          tar -czf tino-service-release.tar.gz -C release .
 
-      - name: Upload artifact for deployment job
+      - name: Upload deployment artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: node-app
-          path: .
+          name: tino-service-release
+          path: tino-service-release.tar.gz
+          if-no-files-found: error
+          retention-days: 1
 
   deploy:
+    name: Deploy to Azure
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     needs: build
+    environment:
+      name: Production
+      url: ${{ steps.deploy.outputs.webapp-url }}
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
+      contents: read
+      id-token: write
 
     steps:
-      - name: Download artifact from build job
+      - name: Download deployment artifact
         uses: actions/download-artifact@v4
         with:
-          name: node-app
-      
+          name: tino-service-release
+
+      - name: Extract deployment package
+        run: |
+          mkdir -p release
+          tar -xzf tino-service-release.tar.gz -C release
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -55,11 +101,24 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_F45D139A62B84D86BE4AF419B7C9B23A }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_C50954B7427D45B488012406493FBF35 }}
 
-      - name: 'Deploy to Azure Web App'
-        id: deploy-to-webapp
+      - name: Deploy to Azure Web App
+        id: deploy
         uses: azure/webapps-deploy@v3
         with:
-          app-name: 'Tino-service'
-          slot-name: 'Production'
-          package: .
-          
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: Production
+          package: release
+          startup-command: npm start
+
+      - name: Verify deployment
+        env:
+          WEBAPP_URL: ${{ steps.deploy.outputs.webapp-url }}
+        run: |
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error "${WEBAPP_URL%/}/health"; then
+              exit 0
+            fi
+            echo "Health check attempt ${attempt}/12 failed; retrying in 10 seconds."
+            sleep 10
+          done
+          exit 1
