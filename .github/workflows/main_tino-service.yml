@@ -59,7 +59,7 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           mkdir -p release
-          cp -R dist node_modules package.json pnpm-lock.yaml release/
+          cp -R dist node_modules package.json pnpm-lock.yaml web.config release/
           tar -czf tino-service-release.tar.gz -C release .
 
       - name: Upload deployment artifact
@@ -98,6 +98,36 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_F45D139A62B84D86BE4AF419B7C9B23A }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_C50954B7427D45B488012406493FBF35 }}
 
+      - name: Resolve Azure Web App
+        id: azure-app
+        shell: bash
+        run: |
+          RESOURCE_GROUP="$(az webapp list \
+            --query "[?name=='${AZURE_WEBAPP_NAME}'].resourceGroup | [0]" \
+            --output tsv)"
+
+          if [ -z "$RESOURCE_GROUP" ]; then
+            echo "Could not find Azure Web App '${AZURE_WEBAPP_NAME}'."
+            exit 1
+          fi
+
+          HOSTNAME="$(az webapp show \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query defaultHostName \
+            --output tsv)"
+
+          IS_LINUX="$(az webapp show \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query reserved \
+            --output tsv)"
+
+          echo "resource-group=$RESOURCE_GROUP" >> "$GITHUB_OUTPUT"
+          echo "hostname=$HOSTNAME" >> "$GITHUB_OUTPUT"
+          echo "is-linux=$IS_LINUX" >> "$GITHUB_OUTPUT"
+          echo "Deploying to https://${HOSTNAME} (Linux: ${IS_LINUX})"
+
       - name: Deploy to Azure Web App
         id: deploy
         uses: azure/webapps-deploy@v3
@@ -105,17 +135,49 @@ jobs:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           slot-name: Production
           package: release
-          startup-command: npm start
+          startup-command: node dist/server.js
+
+      - name: Configure and restart Azure Web App
+        shell: bash
+        env:
+          RESOURCE_GROUP: ${{ steps.azure-app.outputs.resource-group }}
+          IS_LINUX: ${{ steps.azure-app.outputs.is-linux }}
+        run: |
+          if [ "$IS_LINUX" = "true" ]; then
+            az webapp config set \
+              --name "$AZURE_WEBAPP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --startup-file "node dist/server.js"
+          fi
+
+          az webapp restart \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP"
 
       - name: Verify deployment
         env:
-          WEBAPP_URL: ${{ steps.deploy.outputs.webapp-url }}
+          WEBAPP_URL: https://${{ steps.azure-app.outputs.hostname }}
         run: |
+          echo "Checking ${WEBAPP_URL%/}/health"
+
           for attempt in {1..12}; do
-            if curl --fail --silent --show-error "${WEBAPP_URL%/}/health"; then
+            STATUS_CODE="$(curl \
+              --silent \
+              --show-error \
+              --output health-response.txt \
+              --write-out "%{http_code}" \
+              "${WEBAPP_URL%/}/health" || true)"
+
+            echo "Attempt ${attempt}/12 returned HTTP ${STATUS_CODE}"
+            cat health-response.txt || true
+            echo
+
+            if [ "$STATUS_CODE" = "200" ]; then
               exit 0
             fi
-            echo "Health check attempt ${attempt}/12 failed; retrying in 10 seconds."
+
+            echo "Health check failed; retrying in 10 seconds."
             sleep 10
           done
+
           exit 1
