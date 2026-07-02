@@ -76,9 +76,6 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     needs: build
-    environment:
-      name: Production
-      url: ${{ steps.deploy.outputs.webapp-url }}
     permissions:
       contents: read
       id-token: write
