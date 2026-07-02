@@ -43,7 +43,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --config.node-linker=hoisted
 
       - name: Build
         run: pnpm build
@@ -53,7 +53,7 @@ jobs:
 
       - name: Remove development dependencies
         if: github.event_name != 'pull_request'
-        run: pnpm prune --prod
+        run: pnpm prune --prod --config.node-linker=hoisted
 
       - name: Create deployment package
         if: github.event_name != 'pull_request'
@@ -147,8 +147,16 @@ jobs:
             az webapp config set \
               --name "$AZURE_WEBAPP_NAME" \
               --resource-group "$RESOURCE_GROUP" \
+              --linux-fx-version "NODE|22-lts" \
               --startup-file "node dist/server.js"
           fi
+
+          az webapp log config \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --application-logging filesystem \
+            --level information \
+            --web-server-logging filesystem
 
           az webapp restart \
             --name "$AZURE_WEBAPP_NAME" \
@@ -181,3 +189,21 @@ jobs:
           done
 
           exit 1
+
+      - name: Collect Azure startup logs
+        if: failure()
+        env:
+          RESOURCE_GROUP: ${{ steps.azure-app.outputs.resource-group }}
+        run: |
+          az webapp log download \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --log-file azure-webapp-logs.zip || true
+
+          if [ -f azure-webapp-logs.zip ]; then
+            unzip -oq azure-webapp-logs.zip -d azure-webapp-logs
+            find azure-webapp-logs -type f \
+              \( -name "*.log" -o -name "*.txt" \) \
+              -print \
+              -exec tail -n 150 {} \; || true
+          fi
