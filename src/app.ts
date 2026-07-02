@@ -8,6 +8,11 @@ import { userRouter } from './modules/users/user.route.js';
 import { authenticate } from './common/auth.middleware.js';
 import { isAppError } from './common/app-error.js';
 import { sendError } from './common/api-response.js';
+import { authenticateBot } from './common/bot-auth.middleware.js';
+import {
+  telegramBotRouter,
+  telegramUserRouter,
+} from './modules/telegram/telegram.route.js';
 
 export const app = express();
 
@@ -16,9 +21,11 @@ app.use(express.json());
 
 app.use('/health', healthRouter);
 app.use('/auth', authRouter);
+app.use('/bot/telegram', authenticateBot, telegramBotRouter);
 app.use('/api', authenticate);
 app.use('/api/wallets', walletRouter);
 app.use('/api/users', userRouter);
+app.use('/api/telegram', telegramUserRouter);
 
 app.use(
   (
