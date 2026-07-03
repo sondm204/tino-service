@@ -137,6 +137,38 @@ jobs:
           package: release
           startup-command: node dist/server.js
 
+      - name: Validate object storage settings
+        shell: bash
+        env:
+          RESOURCE_GROUP: ${{ steps.azure-app.outputs.resource-group }}
+        run: |
+          set -euo pipefail
+
+          configured_names="$(
+            az webapp config appsettings list \
+              --resource-group "$RESOURCE_GROUP" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --query "[].name" \
+              --output tsv
+          )"
+
+          missing=0
+          for name in \
+            S3_REGION \
+            S3_BUCKET \
+            S3_ACCESS_KEY_ID \
+            S3_SECRET_ACCESS_KEY
+          do
+            if ! grep -Fxq "$name" <<< "$configured_names"; then
+              echo "Missing Azure App Setting: $name" >&2
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Configure and restart Azure Web App
         shell: bash
         env:

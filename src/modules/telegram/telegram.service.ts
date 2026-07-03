@@ -2,7 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { AppError } from '../../common/app-error.js';
 import { ExpenseSplitMethod, WalletMemberStatus } from '../../common/enums.js';
 import { supabase } from '../../db/supabase.js';
-import { createExpense } from '../expenses/expense.service.js';
+import {
+  createExpense,
+  createExpenseAttachment,
+} from '../expenses/expense.service.js';
 import {
   getWallet,
   listWalletMembers,
@@ -385,4 +388,38 @@ export async function createTelegramExpense(
     wallet_name: context.wallet.name,
     member_status: WalletMemberStatus.Active,
   };
+}
+
+export async function createTelegramExpenseAttachment(
+  expenseId: string,
+  payload: TelegramContextRequest,
+  file: Express.Multer.File
+) {
+  const context = await resolveTelegramContext(payload);
+  const { data: expense, error } = await supabase
+    .from('expenses')
+    .select('id, created_by_user_id')
+    .eq('id', expenseId)
+    .eq('wallet_id', context.connection.wallet_id)
+    .is('deleted_at', null)
+    .single();
+
+  if (error || !expense) {
+    throw new AppError(404, 'EXPENSE_NOT_FOUND', 'Expense not found');
+  }
+
+  if (expense.created_by_user_id !== context.account.user_id) {
+    throw new AppError(
+      403,
+      'TELEGRAM_ATTACHMENT_DENIED',
+      'Only the Telegram expense creator can attach an image'
+    );
+  }
+
+  return createExpenseAttachment(
+    context.connection.wallet_id,
+    expenseId,
+    context.account.user_id,
+    file
+  );
 }

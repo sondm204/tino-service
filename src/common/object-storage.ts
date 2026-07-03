@@ -125,11 +125,26 @@ export async function uploadExpenseAttachment(
       })
     );
   } catch (error) {
+    const storageError = error as {
+      name?: string;
+      message?: string;
+      $metadata?: {
+        httpStatusCode?: number;
+        requestId?: string;
+        extendedRequestId?: string;
+      };
+    };
     console.error('S3 expense attachment upload failed', {
       bucket: config.bucket,
-      error: error instanceof Error ? error.message : String(error),
+      endpoint: config.endpoint || 'AWS default',
+      error: storageError.message || String(error),
+      errorName: storageError.name,
+      forcePathStyle: config.forcePathStyle,
+      httpStatusCode: storageError.$metadata?.httpStatusCode,
       key,
       region: config.region,
+      requestId: storageError.$metadata?.requestId,
+      extendedRequestId: storageError.$metadata?.extendedRequestId,
     });
     throw new AppError(502, 'ATTACHMENT_UPLOAD_FAILED', 'Could not upload attachment');
   }

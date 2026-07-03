@@ -6,6 +6,7 @@ import { getRequiredParam } from '../../common/request.js';
 import {
   connectTelegramChat,
   createTelegramExpense,
+  createTelegramExpenseAttachment,
   createTelegramLinkCode,
   createTelegramWalletConnectCode,
   getTelegramContext,
@@ -110,6 +111,38 @@ export async function postTelegramExpense(req: Request, res: Response) {
       201,
       'TELEGRAM_EXPENSE_CREATED',
       'Telegram expense created',
+      data
+    );
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+export async function postTelegramExpenseAttachment(
+  req: Request,
+  res: Response
+) {
+  try {
+    if (!req.file) {
+      return sendError(
+        res,
+        400,
+        'VALIDATION_ERROR',
+        'attachment file is required'
+      );
+    }
+
+    const expenseId = getRequiredParam(req.params, 'expenseId');
+    const data = await createTelegramExpenseAttachment(
+      expenseId,
+      req.body,
+      req.file
+    );
+    return sendSuccess(
+      res,
+      201,
+      'TELEGRAM_ATTACHMENT_CREATED',
+      'Telegram expense attachment uploaded',
       data
     );
   } catch (error) {
