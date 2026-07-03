@@ -13,6 +13,7 @@ import {
   telegramBotRouter,
   telegramUserRouter,
 } from './modules/telegram/telegram.route.js';
+import { notificationRouter } from './modules/notification/notification.route.js';
 
 export const app = express();
 
@@ -26,6 +27,7 @@ app.use('/api', authenticate);
 app.use('/api/wallets', walletRouter);
 app.use('/api/users', userRouter);
 app.use('/api/telegram', telegramUserRouter);
+app.use('/api/notifications', notificationRouter);
 
 app.use(
   (

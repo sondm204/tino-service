@@ -12,6 +12,10 @@ import {
   uploadExpenseAttachment,
 } from '../../common/object-storage.js';
 import { supabase } from '../../db/supabase.js';
+import {
+  createNotifications,
+  type NotificationType,
+} from '../notification/notification.service.js';
 import { requireWalletMember } from '../wallets/wallet.service.js';
 
 export type ExpenseSplitRequest = {
@@ -117,6 +121,42 @@ async function ensureActiveWalletUsers(walletId: string, userIds: string[]) {
       'INVALID_EXPENSE_MEMBER',
       'Payer and split users must be active wallet members'
     );
+  }
+}
+
+async function notifyWalletMembers(input: {
+  walletId: string;
+  actorUserId: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  metadata: Record<string, unknown>;
+}) {
+  const { data, error } = await supabase
+    .from('wallet_members')
+    .select('user_id')
+    .eq('wallet_id', input.walletId)
+    .eq('status', 'active')
+    .neq('user_id', input.actorUserId);
+
+  if (error) {
+    console.error('Could not resolve notification recipients', error.message);
+    return;
+  }
+
+  try {
+    await createNotifications(
+      (data ?? []).map((member) => ({
+        user_id: member.user_id as string,
+        created_by: input.actorUserId,
+        type: input.type,
+        title: input.title,
+        message: input.message,
+        metadata: input.metadata,
+      }))
+    );
+  } catch (error) {
+    console.error('Could not create expense notifications', error);
   }
 }
 
@@ -282,6 +322,18 @@ export async function createExpense(
     }
   }
 
+  await notifyWalletMembers({
+    walletId,
+    actorUserId,
+    type: 'EXPENSE_CREATED',
+    title: 'Khoản chi mới',
+    message: `${title}: ${totalAmount.toLocaleString('vi-VN')} ${currency}`,
+    metadata: {
+      wallet_id: walletId,
+      expense_id: expense.id,
+    },
+  });
+
   return expense as ExpenseResponse;
 }
 
@@ -367,6 +419,18 @@ export async function updateExpense(
       }
     }
   }
+
+  await notifyWalletMembers({
+    walletId,
+    actorUserId,
+    type: 'EXPENSE_UPDATED',
+    title: 'Khoản chi đã cập nhật',
+    message: `${data.title}: ${Number(data.total_amount).toLocaleString('vi-VN')} ${data.currency}`,
+    metadata: {
+      wallet_id: walletId,
+      expense_id: expenseId,
+    },
+  });
 
   return data as ExpenseResponse;
 }
