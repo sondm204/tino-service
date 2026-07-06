@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import {
+  deleteWalletById,
   getWalletById,
   getWalletMembers,
   getWallets,
@@ -14,6 +15,7 @@ export const walletRouter = Router();
 walletRouter.get('/', getWallets);
 walletRouter.post('/', postWallet);
 walletRouter.use('/:walletId/expenses', expenseRouter);
+walletRouter.delete('/:walletId', deleteWalletById);
 walletRouter.get('/:walletId/members', getWalletMembers);
 walletRouter.get('/:walletId', getWalletById);
 walletRouter.post('/:walletId/members', postWalletMember);

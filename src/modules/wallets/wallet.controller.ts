@@ -7,6 +7,7 @@ import { getRequiredParam } from '../../common/request.js';
 import {
   addWalletMember,
   createWallet,
+  deleteWallet,
   getWallet,
   getWalletSummary,
   listWalletMembers,
@@ -17,7 +18,8 @@ import {
 export async function getWallets(req: Request, res: Response) {
   try {
     const userId = getAuthenticatedUserId(req);
-    const data = await listWallets(getPageable(req), userId);
+    const month = typeof req.query.month === 'string' ? req.query.month : undefined;
+    const data = await listWallets(getPageable(req), userId, month);
 
     return sendSuccess(res, 200, 'WALLET_LISTED', 'Wallets fetched successfully', data);
   } catch (error) {
@@ -34,6 +36,21 @@ export async function postWallet(req: Request, res: Response) {
     const data = await createWallet(req.body, getAuthenticatedUserId(req));
 
     return sendSuccess(res, 201, 'WALLET_CREATED', 'Wallet created successfully', data);
+  } catch (error) {
+    if (isAppError(error)) {
+      return sendError(res, error.status, error.code, error.message);
+    }
+
+    return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Internal server error');
+  }
+}
+
+export async function deleteWalletById(req: Request, res: Response) {
+  try {
+    const walletId = getRequiredParam(req.params, 'walletId');
+    const data = await deleteWallet(walletId, getAuthenticatedUserId(req));
+
+    return sendSuccess(res, 200, 'WALLET_DELETED', 'Wallet deleted successfully', data);
   } catch (error) {
     if (isAppError(error)) {
       return sendError(res, error.status, error.code, error.message);

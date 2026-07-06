@@ -27,6 +27,7 @@ export type WalletResponse = {
   owner_id: string;
   created_at: string;
   updated_at: string | null;
+  deleted_at: string | null;
   total_amount?: number;
   user_share_amount?: number;
 };
@@ -71,21 +72,48 @@ type ExpenseSplitRow = {
   amount: number | string | null;
 };
 
-export async function listWallets(pageable: PageableRequest, userId?: string) {
+function getMonthPeriod(month: string | undefined) {
+  const targetMonth = month || new Date().toISOString().slice(0, 7);
+
+  if (!/^\d{4}-\d{2}$/.test(targetMonth)) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'month must use YYYY-MM format');
+  }
+
+  const periodStart = `${targetMonth}-01`;
+  const periodEnd = new Date(`${periodStart}T00:00:00.000Z`);
+  periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
+
+  return {
+    periodStart,
+    periodEndDate: periodEnd.toISOString().slice(0, 10),
+  };
+}
+
+export async function listWallets(
+  pageable: PageableRequest,
+  userId?: string,
+  month?: string
+) {
   if (!userId) {
     throw new AppError(401, 'UNAUTHORIZED', 'Authentication is required');
   }
 
-  return listWalletsWithTotals(pageable, userId);
+  return listWalletsWithTotals(pageable, userId, month);
 }
 
-export async function listWalletsWithTotals(pageable: PageableRequest, userId: string) {
+export async function listWalletsWithTotals(
+  pageable: PageableRequest,
+  userId: string,
+  month?: string
+) {
+  const { periodStart, periodEndDate } = getMonthPeriod(month);
   const { from, to } = toSupabaseRange(pageable);
   const { data, error, count } = await supabase
     .from('wallets')
     .select('*, wallet_members!inner(user_id, status)', { count: 'exact' })
     .eq('wallet_members.user_id', userId)
     .eq('wallet_members.status', WalletMemberStatus.Active)
+    .is('deleted_at', null)
     .order('created_at', { ascending: false })
     .range(from, to);
 
@@ -111,6 +139,8 @@ export async function listWalletsWithTotals(pageable: PageableRequest, userId: s
       .from('expenses')
       .select('id, wallet_id, total_amount, paid_by_user_id')
       .in('wallet_id', walletIds)
+      .gte('expense_date', periodStart)
+      .lt('expense_date', periodEndDate)
       .is('deleted_at', null),
     supabase
       .from('wallet_members')
@@ -202,6 +232,7 @@ export async function getWallet(walletId: string) {
     .from('wallets')
     .select('*')
     .eq('id', walletId)
+    .is('deleted_at', null)
     .single();
 
   if (error || !data) {
@@ -212,6 +243,8 @@ export async function getWallet(walletId: string) {
 }
 
 export async function requireWalletMember(walletId: string, userId: string) {
+  await getWallet(walletId);
+
   const { data, error } = await supabase
     .from('wallet_members')
     .select('id, wallet_id, user_id, role, status, joined_at')
@@ -376,22 +409,31 @@ export async function addWalletMember(
   return data as WalletMemberResponse;
 }
 
+export async function deleteWallet(walletId: string, actorUserId: string) {
+  await requireWalletOwner(walletId, actorUserId);
+
+  const { data, error } = await supabase
+    .from('wallets')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', walletId)
+    .is('deleted_at', null)
+    .select('id')
+    .single();
+
+  if (error || !data) {
+    throw new AppError(400, 'WALLET_DELETE_FAILED', error?.message || 'Wallet delete failed');
+  }
+
+  return { id: data.id as string };
+}
+
 export async function getWalletSummary(
   walletId: string,
   month: string | undefined,
   userId: string
 ) {
   await requireWalletMember(walletId, userId);
-  const targetMonth = month || new Date().toISOString().slice(0, 7);
-
-  if (!/^\d{4}-\d{2}$/.test(targetMonth)) {
-    throw new AppError(400, 'VALIDATION_ERROR', 'month must use YYYY-MM format');
-  }
-
-  const periodStart = `${targetMonth}-01`;
-  const periodEnd = new Date(`${periodStart}T00:00:00.000Z`);
-  periodEnd.setUTCMonth(periodEnd.getUTCMonth() + 1);
-  const periodEndDate = periodEnd.toISOString().slice(0, 10);
+  const { periodStart, periodEndDate } = getMonthPeriod(month);
 
   const [wallet, membersResult, expensesResult] = await Promise.all([
     getWallet(walletId),
