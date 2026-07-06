@@ -8,6 +8,7 @@ import {
 } from '../expenses/expense.service.js';
 import {
   getWallet,
+  getWalletSummary,
   listWalletMembers,
   requireWalletMember,
   requireWalletOwner,
@@ -34,6 +35,10 @@ type ConnectTelegramChatRequest = TelegramIdentity & {
 type TelegramContextRequest = {
   telegram_user_id?: string;
   telegram_chat_id?: string;
+};
+
+type TelegramSummaryRequest = TelegramContextRequest & {
+  month?: string;
 };
 
 type CreateTelegramExpenseRequest = TelegramContextRequest & {
@@ -349,6 +354,16 @@ export async function getTelegramContext(payload: TelegramContextRequest) {
       telegram_linked: false,
     })),
   };
+}
+
+export async function getTelegramSummary(payload: TelegramSummaryRequest) {
+  const context = await resolveTelegramContext(payload);
+
+  return getWalletSummary(
+    context.connection.wallet_id,
+    payload.month,
+    context.account.user_id
+  );
 }
 
 export async function createTelegramExpense(
