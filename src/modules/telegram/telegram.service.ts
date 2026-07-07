@@ -304,6 +304,33 @@ export async function connectTelegramChat(
   return { ...data, wallet: await getWallet(connectCode.wallet_id) };
 }
 
+export async function disconnectTelegramChat(payload: TelegramContextRequest) {
+  const context = await resolveTelegramContext(payload);
+  await requireWalletOwner(
+    context.connection.wallet_id,
+    context.account.user_id
+  );
+
+  const { error } = await supabase
+    .from('telegram_chat_wallets')
+    .delete()
+    .eq('telegram_chat_id', context.connection.telegram_chat_id)
+    .eq('wallet_id', context.connection.wallet_id);
+
+  if (error) {
+    throw new AppError(
+      400,
+      'TELEGRAM_CHAT_DISCONNECT_FAILED',
+      error.message
+    );
+  }
+
+  return {
+    telegram_chat_id: context.connection.telegram_chat_id,
+    wallet: context.wallet,
+  };
+}
+
 async function resolveTelegramContext(payload: TelegramContextRequest) {
   const telegramUserId = normalizeTelegramId(
     payload.telegram_user_id,

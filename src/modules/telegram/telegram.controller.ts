@@ -9,6 +9,7 @@ import {
   createTelegramExpenseAttachment,
   createTelegramLinkCode,
   createTelegramWalletConnectCode,
+  disconnectTelegramChat,
   getTelegramContext,
   getTelegramSummary,
   linkTelegramAccount,
@@ -82,6 +83,21 @@ export async function postTelegramConnect(req: Request, res: Response) {
       200,
       'TELEGRAM_CHAT_CONNECTED',
       'Telegram chat connected',
+      data
+    );
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+export async function postTelegramDisconnect(req: Request, res: Response) {
+  try {
+    const data = await disconnectTelegramChat(req.body);
+    return sendSuccess(
+      res,
+      200,
+      'TELEGRAM_CHAT_DISCONNECTED',
+      'Telegram chat disconnected',
       data
     );
   } catch (error) {

@@ -4,6 +4,7 @@ import { AppError } from '../../common/app-error.js';
 import {
   postTelegramConnect,
   postTelegramContext,
+  postTelegramDisconnect,
   postTelegramExpense,
   postTelegramExpenseAttachment,
   postTelegramLink,
@@ -43,6 +44,7 @@ telegramUserRouter.post(
 
 telegramBotRouter.post('/link', postTelegramLink);
 telegramBotRouter.post('/connect', postTelegramConnect);
+telegramBotRouter.post('/disconnect', postTelegramDisconnect);
 telegramBotRouter.post('/context', postTelegramContext);
 telegramBotRouter.post('/summary', postTelegramSummary);
 telegramBotRouter.post('/expenses', postTelegramExpense);
