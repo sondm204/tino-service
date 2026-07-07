@@ -7,6 +7,7 @@ import {
   getSummary,
   postWallet,
   postWalletInvitation,
+  postWalletLeave,
   postWalletMember,
 } from './wallet.controller.js';
 import { expenseRouter } from '../expenses/expense.route.js';
@@ -18,6 +19,7 @@ walletRouter.post('/', postWallet);
 walletRouter.use('/:walletId/expenses', expenseRouter);
 walletRouter.delete('/:walletId', deleteWalletById);
 walletRouter.post('/:walletId/invitations', postWalletInvitation);
+walletRouter.post('/:walletId/leave', postWalletLeave);
 walletRouter.get('/:walletId/members', getWalletMembers);
 walletRouter.get('/:walletId', getWalletById);
 walletRouter.post('/:walletId/members', postWalletMember);

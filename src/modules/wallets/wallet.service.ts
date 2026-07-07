@@ -63,6 +63,10 @@ export type InviteWalletMemberRequest = {
   email?: string;
 };
 
+export type LeaveWalletRequest = {
+  new_owner_user_id?: string;
+};
+
 type ExpenseRow = {
   id: string;
   wallet_id: string;
@@ -555,6 +559,101 @@ export async function inviteWalletMemberByEmail(
     user: invitedUser,
     notification_sent: true,
     email_sent: emailResult.sent,
+  };
+}
+
+export async function leaveWallet(
+  walletId: string,
+  payload: LeaveWalletRequest,
+  actorUserId: string
+) {
+  const wallet = await getWallet(walletId);
+  const actorMember = await requireWalletMember(walletId, actorUserId);
+
+  if (actorMember.role !== WalletMemberRole.Owner) {
+    const { data, error } = await supabase
+      .from('wallet_members')
+      .update({ status: WalletMemberStatus.Inactive })
+      .eq('id', actorMember.id)
+      .select('id, wallet_id, user_id, role, status, joined_at')
+      .single();
+
+    if (error || !data) {
+      throw new AppError(
+        400,
+        'WALLET_LEAVE_FAILED',
+        error?.message || 'Could not leave wallet'
+      );
+    }
+
+    return { member: data as WalletMemberResponse, new_owner_id: wallet.owner_id };
+  }
+
+  const newOwnerUserId = payload.new_owner_user_id?.trim();
+
+  if (!newOwnerUserId) {
+    throw new AppError(
+      400,
+      'NEW_OWNER_REQUIRED',
+      'new_owner_user_id is required when owner leaves wallet'
+    );
+  }
+
+  if (newOwnerUserId === actorUserId) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'New owner must be another member');
+  }
+
+  const { data: newOwnerMember, error: newOwnerError } = await supabase
+    .from('wallet_members')
+    .select('id, wallet_id, user_id, role, status, joined_at')
+    .eq('wallet_id', walletId)
+    .eq('user_id', newOwnerUserId)
+    .eq('status', WalletMemberStatus.Active)
+    .single();
+
+  if (newOwnerError || !newOwnerMember) {
+    throw new AppError(400, 'NEW_OWNER_INVALID', 'New owner must be an active wallet member');
+  }
+
+  const now = new Date().toISOString();
+  const { error: walletError } = await supabase
+    .from('wallets')
+    .update({ owner_id: newOwnerUserId, updated_at: now })
+    .eq('id', walletId)
+    .is('deleted_at', null);
+
+  if (walletError) {
+    throw new AppError(400, 'WALLET_OWNER_TRANSFER_FAILED', walletError.message);
+  }
+
+  const [{ data: promotedMember, error: promoteError }, { data: inactiveMember, error: leaveError }] =
+    await Promise.all([
+      supabase
+        .from('wallet_members')
+        .update({ role: WalletMemberRole.Owner })
+        .eq('id', newOwnerMember.id)
+        .select('id, wallet_id, user_id, role, status, joined_at')
+        .single(),
+      supabase
+        .from('wallet_members')
+        .update({ role: WalletMemberRole.Member, status: WalletMemberStatus.Inactive })
+        .eq('id', actorMember.id)
+        .select('id, wallet_id, user_id, role, status, joined_at')
+        .single(),
+    ]);
+
+  if (promoteError || !promotedMember || leaveError || !inactiveMember) {
+    throw new AppError(
+      400,
+      'WALLET_LEAVE_FAILED',
+      promoteError?.message || leaveError?.message || 'Could not leave wallet'
+    );
+  }
+
+  return {
+    member: inactiveMember as WalletMemberResponse,
+    new_owner: promotedMember as WalletMemberResponse,
+    new_owner_id: newOwnerUserId,
   };
 }
 
