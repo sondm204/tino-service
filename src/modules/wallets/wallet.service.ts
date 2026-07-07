@@ -1,4 +1,5 @@
 import { AppError } from '../../common/app-error.js';
+import { sendEmail } from '../../common/email.js';
 import {
   WalletCurrency,
   WalletMemberRole,
@@ -9,6 +10,7 @@ import {
 import type { PageableRequest } from '../../common/pageable.js';
 import { toPageableResponse, toSupabaseRange } from '../../common/pageable.js';
 import { supabase } from '../../db/supabase.js';
+import { createNotification } from '../notification/notification.service.js';
 
 export type CreateWalletRequest = {
   name?: string;
@@ -55,6 +57,10 @@ export type AddWalletMemberRequest = {
   user_id?: string;
   role?: string;
   status?: string;
+};
+
+export type InviteWalletMemberRequest = {
+  email?: string;
 };
 
 type ExpenseRow = {
@@ -407,6 +413,149 @@ export async function addWalletMember(
   }
 
   return data as WalletMemberResponse;
+}
+
+export async function inviteWalletMemberByEmail(
+  walletId: string,
+  payload: InviteWalletMemberRequest,
+  actorUserId: string
+) {
+  const email = payload.email?.trim().toLowerCase();
+
+  if (!email || !email.includes('@')) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'email is invalid');
+  }
+
+  await requireWalletOwner(walletId, actorUserId);
+  const wallet = await getWallet(walletId);
+
+  if (wallet.type !== WalletType.Shared) {
+    throw new AppError(
+      400,
+      'WALLET_INVITE_NOT_ALLOWED',
+      'Only shared wallets can invite members'
+    );
+  }
+
+  const [{ data: invitedUser, error: invitedUserError }, { data: owner }] =
+    await Promise.all([
+      supabase
+        .from('users')
+        .select('id, email, display_name, avatar_url, status')
+        .eq('email', email)
+        .eq('status', 'active')
+        .single(),
+      supabase
+        .from('users')
+        .select('id, email, display_name')
+        .eq('id', actorUserId)
+        .single(),
+    ]);
+
+  if (invitedUserError || !invitedUser) {
+    throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+  }
+
+  if (invitedUser.id === actorUserId) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'Cannot invite yourself');
+  }
+
+  const { data: existingMember, error: existingMemberError } = await supabase
+    .from('wallet_members')
+    .select('id, wallet_id, user_id, role, status, joined_at')
+    .eq('wallet_id', walletId)
+    .eq('user_id', invitedUser.id)
+    .maybeSingle();
+
+  if (existingMemberError) {
+    throw new AppError(400, 'WALLET_MEMBER_LOOKUP_FAILED', existingMemberError.message);
+  }
+
+  let member: WalletMemberResponse;
+
+  if (existingMember?.status === WalletMemberStatus.Active) {
+    throw new AppError(
+      409,
+      'WALLET_MEMBER_ALREADY_EXISTS',
+      'User is already a wallet member'
+    );
+  }
+
+  if (existingMember) {
+    const { data, error } = await supabase
+      .from('wallet_members')
+      .update({
+        role: WalletMemberRole.Member,
+        status: WalletMemberStatus.Active,
+        joined_at: new Date().toISOString(),
+      })
+      .eq('id', existingMember.id)
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      throw new AppError(
+        400,
+        'WALLET_MEMBER_INVITE_FAILED',
+        error?.message || 'Could not invite member'
+      );
+    }
+
+    member = data as WalletMemberResponse;
+  } else {
+    const { data, error } = await supabase
+      .from('wallet_members')
+      .insert({
+        wallet_id: walletId,
+        user_id: invitedUser.id,
+        role: WalletMemberRole.Member,
+        status: WalletMemberStatus.Active,
+      })
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      throw new AppError(
+        400,
+        'WALLET_MEMBER_INVITE_FAILED',
+        error?.message || 'Could not invite member'
+      );
+    }
+
+    member = data as WalletMemberResponse;
+  }
+
+  const ownerName =
+    typeof owner?.display_name === 'string' && owner.display_name.trim()
+      ? owner.display_name.trim()
+      : 'Owner';
+
+  await createNotification({
+    user_id: invitedUser.id,
+    created_by: actorUserId,
+    type: 'SYSTEM',
+    title: 'Bạn đã được mời vào ví',
+    message: `${ownerName} đã thêm bạn vào ví "${wallet.name}".`,
+    metadata: {
+      wallet_id: wallet.id,
+      wallet_name: wallet.name,
+      action: 'WALLET_INVITED',
+    },
+  });
+
+  const emailResult = await sendEmail({
+    to: invitedUser.email,
+    subject: `Bạn đã được mời vào ví ${wallet.name}`,
+    text: `${ownerName} đã thêm bạn vào ví "${wallet.name}" trên Tino Expense. Hãy mở ứng dụng để xem chi tiết.`,
+    html: `<p>${ownerName} đã thêm bạn vào ví <strong>${wallet.name}</strong> trên Tino Expense.</p><p>Hãy mở ứng dụng để xem chi tiết.</p>`,
+  });
+
+  return {
+    member,
+    user: invitedUser,
+    notification_sent: true,
+    email_sent: emailResult.sent,
+  };
 }
 
 export async function deleteWallet(walletId: string, actorUserId: string) {

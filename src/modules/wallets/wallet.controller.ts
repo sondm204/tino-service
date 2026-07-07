@@ -10,6 +10,7 @@ import {
   deleteWallet,
   getWallet,
   getWalletSummary,
+  inviteWalletMemberByEmail,
   listWalletMembers,
   listWallets,
   requireWalletMember,
@@ -90,6 +91,31 @@ export async function postWalletMember(req: Request, res: Response) {
       201,
       'WALLET_MEMBER_CREATED',
       'Wallet member created successfully',
+      data
+    );
+  } catch (error) {
+    if (isAppError(error)) {
+      return sendError(res, error.status, error.code, error.message);
+    }
+
+    return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Internal server error');
+  }
+}
+
+export async function postWalletInvitation(req: Request, res: Response) {
+  try {
+    const walletId = getRequiredParam(req.params, 'walletId');
+    const data = await inviteWalletMemberByEmail(
+      walletId,
+      req.body,
+      getAuthenticatedUserId(req)
+    );
+
+    return sendSuccess(
+      res,
+      201,
+      'WALLET_MEMBER_INVITED',
+      'Wallet member invited successfully',
       data
     );
   } catch (error) {

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { AppError } from '../../common/app-error.js';
 import {
+  getUserLookup,
   getUsers,
   patchPassword,
   patchProfile,
@@ -24,6 +25,7 @@ const avatarUpload = multer({
   },
 });
 
+userRouter.get('/lookup', getUserLookup);
 userRouter.get('/', getUsers);
 userRouter.patch('/me', patchProfile);
 userRouter.patch('/me/password', patchPassword);

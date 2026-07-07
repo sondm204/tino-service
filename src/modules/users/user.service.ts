@@ -52,6 +52,27 @@ export async function listUsers(pageable: PageableRequest) {
   return toPageableResponse((data ?? []) as UserResponse[], pageable, count ?? 0);
 }
 
+export async function findUserByEmail(emailInput: string | undefined) {
+  const email = emailInput?.trim().toLowerCase();
+
+  if (!email || !email.includes('@')) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'Email is invalid');
+  }
+
+  const { data, error } = await supabase
+    .from('users')
+    .select(USER_SELECT)
+    .eq('email', email)
+    .eq('status', UserStatus.Active)
+    .single();
+
+  if (error || !data) {
+    throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+  }
+
+  return data as UserResponse;
+}
+
 export async function createUser(payload: CreateUserRequest) {
   const email = payload.email?.trim().toLowerCase();
   const password = payload.password;

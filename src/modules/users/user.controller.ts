@@ -7,6 +7,7 @@ import { uploadUserAvatar } from '../../common/object-storage.js';
 import {
   changePassword,
   createUser,
+  findUserByEmail,
   listUsers,
   updateAvatar,
   updateProfile,
@@ -31,6 +32,18 @@ export async function getUsers(req: Request, res: Response) {
     }
 
     return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Internal server error');
+  }
+}
+
+export async function getUserLookup(req: Request, res: Response) {
+  try {
+    const email =
+      typeof req.query.email === 'string' ? req.query.email : undefined;
+    const data = await findUserByEmail(email);
+
+    return sendSuccess(res, 200, 'USER_FOUND', 'User fetched successfully', data);
+  } catch (error) {
+    return handleError(res, error);
   }
 }
 
