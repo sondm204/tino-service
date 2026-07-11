@@ -8,6 +8,7 @@ import {
 } from '../expenses/expense.service.js';
 import {
   getWallet,
+  getMonthPeriod,
   getWalletSummary,
   listWalletMembers,
   requireWalletMember,
@@ -41,6 +42,11 @@ type TelegramSummaryRequest = TelegramContextRequest & {
   month?: string;
 };
 
+type TelegramPersonalSummaryRequest = {
+  telegram_user_id?: string;
+  month?: string;
+};
+
 type CreateTelegramExpenseRequest = TelegramContextRequest & {
   title?: string;
   total_amount?: number;
@@ -50,6 +56,12 @@ type CreateTelegramExpenseRequest = TelegramContextRequest & {
 type TelegramAccountRow = {
   user_id: string;
   telegram_user_id: number | string;
+};
+
+type TelegramExpenseSplitRow = {
+  expense_id: string;
+  user_id: string;
+  amount: number | string | null;
 };
 
 function normalizeTelegramId(value: string | undefined, field: string) {
@@ -391,6 +403,195 @@ export async function getTelegramSummary(payload: TelegramSummaryRequest) {
     payload.month,
     context.account.user_id
   );
+}
+
+export async function getTelegramPersonalSummary(
+  payload: TelegramPersonalSummaryRequest
+) {
+  const telegramUserId = normalizeTelegramId(
+    payload.telegram_user_id,
+    'telegram_user_id'
+  );
+  const account = await getTelegramAccount(telegramUserId);
+  const { periodStart, periodEndDate } = getMonthPeriod(payload.month);
+  const { data: memberWallets, error: memberWalletsError } = await supabase
+    .from('wallet_members')
+    .select(
+      `
+        wallet_id,
+        wallet:wallets!inner (
+          id,
+          name,
+          currency,
+          deleted_at
+        )
+      `
+    )
+    .eq('user_id', account.user_id)
+    .eq('status', WalletMemberStatus.Active)
+    .is('wallet.deleted_at', null);
+
+  if (memberWalletsError) {
+    throw new AppError(
+      400,
+      'TELEGRAM_PERSONAL_SUMMARY_FAILED',
+      memberWalletsError.message
+    );
+  }
+
+  const wallets = ((memberWallets ?? []) as unknown as Array<{
+    wallet_id: string;
+    wallet: {
+      id: string;
+      name: string;
+      currency: string;
+      deleted_at: string | null;
+    };
+  }>).map((item) => item.wallet);
+  const walletIds = wallets.map((wallet) => wallet.id);
+
+  if (walletIds.length === 0) {
+    return {
+      period_start: periodStart,
+      period_end: periodEndDate,
+      totals_by_currency: [],
+      wallets: [],
+    };
+  }
+
+  const [expensesResult, membersResult] = await Promise.all([
+    supabase
+      .from('expenses')
+      .select('id, wallet_id, total_amount, paid_by_user_id')
+      .in('wallet_id', walletIds)
+      .gte('expense_date', periodStart)
+      .lt('expense_date', periodEndDate)
+      .is('deleted_at', null),
+    supabase
+      .from('wallet_members')
+      .select('wallet_id, user_id')
+      .in('wallet_id', walletIds)
+      .eq('status', WalletMemberStatus.Active),
+  ]);
+
+  const { data: expenses, error: expensesError } = expensesResult;
+
+  if (expensesError) {
+    throw new AppError(400, 'EXPENSE_LIST_FAILED', expensesError.message);
+  }
+
+  const { data: members, error: membersError } = membersResult;
+
+  if (membersError) {
+    throw new AppError(400, 'WALLET_MEMBER_LIST_FAILED', membersError.message);
+  }
+
+  const expenseRows = (expenses ?? []) as Array<{
+    id: string;
+    wallet_id: string;
+    total_amount: number | string;
+    paid_by_user_id: string;
+  }>;
+  const expenseIds = expenseRows.map((expense) => expense.id);
+  const splitsByExpense = new Map<string, TelegramExpenseSplitRow[]>();
+  const membersByWallet = new Map<string, string[]>();
+
+  for (const member of (members ?? []) as Array<{
+    wallet_id: string;
+    user_id: string;
+  }>) {
+    const current = membersByWallet.get(member.wallet_id) ?? [];
+    current.push(member.user_id);
+    membersByWallet.set(member.wallet_id, current);
+  }
+
+  if (expenseIds.length > 0) {
+    const { data: splits, error: splitsError } = await supabase
+      .from('expense_splits')
+      .select('expense_id, user_id, amount')
+      .in('expense_id', expenseIds);
+
+    if (splitsError) {
+      throw new AppError(400, 'EXPENSE_SPLIT_LIST_FAILED', splitsError.message);
+    }
+
+    for (const split of (splits ?? []) as TelegramExpenseSplitRow[]) {
+      const current = splitsByExpense.get(split.expense_id) ?? [];
+      current.push(split);
+      splitsByExpense.set(split.expense_id, current);
+    }
+  }
+
+  const walletSummaryById = new Map(
+    wallets.map((wallet) => [
+      wallet.id,
+      {
+        wallet_id: wallet.id,
+        wallet_name: wallet.name,
+        currency: wallet.currency,
+        total_amount: 0,
+        paid_amount: 0,
+        share_amount: 0,
+      },
+    ])
+  );
+
+  for (const expense of expenseRows) {
+    const walletSummary = walletSummaryById.get(expense.wallet_id);
+
+    if (!walletSummary) continue;
+
+    const amount = Number(expense.total_amount);
+    walletSummary.total_amount += amount;
+
+    if (expense.paid_by_user_id === account.user_id) {
+      walletSummary.paid_amount += amount;
+    }
+
+    const splits = splitsByExpense.get(expense.id) ?? [];
+    const userSplit = splits.find((split) => split.user_id === account.user_id);
+
+    if (userSplit) {
+      walletSummary.share_amount += Number(userSplit.amount ?? 0);
+    } else if (splits.length === 0) {
+      const activeMemberIds = membersByWallet.get(expense.wallet_id) ?? [];
+
+      if (activeMemberIds.includes(account.user_id) && activeMemberIds.length > 0) {
+        walletSummary.share_amount += amount / activeMemberIds.length;
+      }
+    }
+  }
+
+  const totalsByCurrency = new Map<
+    string,
+    {
+      currency: string;
+      total_amount: number;
+      paid_amount: number;
+      share_amount: number;
+    }
+  >();
+
+  for (const walletSummary of walletSummaryById.values()) {
+    const total = totalsByCurrency.get(walletSummary.currency) ?? {
+      currency: walletSummary.currency,
+      total_amount: 0,
+      paid_amount: 0,
+      share_amount: 0,
+    };
+
+    total.total_amount += walletSummary.total_amount;
+    total.paid_amount += walletSummary.paid_amount;
+    total.share_amount += walletSummary.share_amount;
+    totalsByCurrency.set(walletSummary.currency, total);
+  }
+
+  return {
+    period_start: periodStart,
+    period_end: periodEndDate,
+    totals_by_currency: Array.from(totalsByCurrency.values()),
+    wallets: Array.from(walletSummaryById.values()),
+  };
 }
 
 export async function createTelegramExpense(

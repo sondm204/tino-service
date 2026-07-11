@@ -11,6 +11,7 @@ import {
   createTelegramWalletConnectCode,
   disconnectTelegramChat,
   getTelegramContext,
+  getTelegramPersonalSummary,
   getTelegramSummary,
   linkTelegramAccount,
 } from './telegram.service.js';
@@ -128,6 +129,21 @@ export async function postTelegramSummary(req: Request, res: Response) {
       200,
       'TELEGRAM_SUMMARY_FETCHED',
       'Telegram wallet summary fetched',
+      data
+    );
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+export async function postTelegramPersonalSummary(req: Request, res: Response) {
+  try {
+    const data = await getTelegramPersonalSummary(req.body);
+    return sendSuccess(
+      res,
+      200,
+      'TELEGRAM_PERSONAL_SUMMARY_FETCHED',
+      'Telegram personal summary fetched',
       data
     );
   } catch (error) {
