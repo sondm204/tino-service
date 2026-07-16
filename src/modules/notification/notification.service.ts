@@ -5,6 +5,7 @@ import {
   toSupabaseRange,
 } from '../../common/pageable.js';
 import { supabase } from '../../db/supabase.js';
+import { sendPushForNotifications } from '../push-devices/push-device.service.js';
 
 export type NotificationStatus = 'UNREAD' | 'READ';
 export type NotificationType =
@@ -61,7 +62,15 @@ export async function createNotification(input: CreateNotificationInput) {
     );
   }
 
-  return data as Notification;
+  const notification = data as Notification;
+
+  try {
+    await sendPushForNotifications([notification]);
+  } catch (error) {
+    console.error('Could not send push notification', error);
+  }
+
+  return notification;
 }
 
 export async function createNotifications(inputs: CreateNotificationInput[]) {
@@ -85,7 +94,15 @@ export async function createNotifications(inputs: CreateNotificationInput[]) {
     throw new AppError(400, 'NOTIFICATION_CREATE_FAILED', error.message);
   }
 
-  return (data ?? []) as Notification[];
+  const notifications = (data ?? []) as Notification[];
+
+  try {
+    await sendPushForNotifications(notifications);
+  } catch (error) {
+    console.error('Could not send push notifications', error);
+  }
+
+  return notifications;
 }
 
 export async function listNotifications(
