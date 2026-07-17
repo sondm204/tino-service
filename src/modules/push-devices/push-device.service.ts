@@ -27,6 +27,12 @@ export type RegisterPushDeviceInput = {
   device_name?: string | null;
 };
 
+type PushDeviceTokenRow = {
+  user_id: string;
+  fcm_token: string;
+  platform: PushDevicePlatform;
+};
+
 const validPlatforms = new Set(['ios', 'android', 'web']);
 
 function requireText(value: unknown, field: string) {
@@ -111,7 +117,7 @@ export async function sendPushForNotifications(notifications: Notification[]) {
   const userIds = [...new Set(notifications.map((item) => item.user_id))];
   const { data, error } = await supabase
     .from('user_push_devices')
-    .select('user_id, fcm_token')
+    .select('user_id, fcm_token, platform')
     .in('user_id', userIds)
     .is('revoked_at', null);
 
@@ -120,50 +126,47 @@ export async function sendPushForNotifications(notifications: Notification[]) {
     return;
   }
 
-  const tokensByUser = new Map<string, string[]>();
+  const tokensByUser = new Map<string, PushDeviceTokenRow[]>();
 
-  for (const row of data ?? []) {
-    const userId = row.user_id as string;
-    const tokens = tokensByUser.get(userId) ?? [];
-    tokens.push(row.fcm_token as string);
-    tokensByUser.set(userId, tokens);
+  for (const row of (data ?? []) as PushDeviceTokenRow[]) {
+    const tokens = tokensByUser.get(row.user_id) ?? [];
+    tokens.push(row);
+    tokensByUser.set(row.user_id, tokens);
   }
 
   const invalidTokens = new Set<string>();
-  let failureCount = 0;
-  let successCount = 0;
-  let targetTokenCount = 0;
 
   await Promise.all(
     notifications.map(async (notification) => {
-      const tokens = tokensByUser.get(notification.user_id) ?? [];
+      const devices = tokensByUser.get(notification.user_id) ?? [];
 
-      if (tokens.length === 0) {
+      if (devices.length === 0) {
         return;
       }
 
-      targetTokenCount += tokens.length;
+      const mobileTokens = devices
+        .filter((device) => device.platform !== 'web')
+        .map((device) => device.fcm_token);
+      const webTokens = devices
+        .filter((device) => device.platform === 'web')
+        .map((device) => device.fcm_token);
 
       try {
-        const result = await sendFirebasePush(tokens, notification);
-        failureCount += result.failureCount;
-        successCount += result.successCount;
-        result.invalidTokens.forEach((token) => invalidTokens.add(token));
+        const results = await Promise.all([
+          sendFirebasePush(mobileTokens, notification),
+          sendFirebasePush(webTokens, notification, {
+            includeNotificationPayload: false,
+          }),
+        ]);
+
+        for (const result of results) {
+          result.invalidTokens.forEach((token) => invalidTokens.add(token));
+        }
       } catch (error) {
         console.error('Could not send push notification', error);
       }
     })
   );
-
-  if (targetTokenCount > 0) {
-    console.info('Push notifications sent', {
-      notifications: notifications.length,
-      targetTokenCount,
-      successCount,
-      failureCount,
-      invalidTokenCount: invalidTokens.size,
-    });
-  }
 
   if (invalidTokens.size > 0) {
     const now = new Date().toISOString();

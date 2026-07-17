@@ -14,6 +14,10 @@ type PushSendResult = {
   successCount: number;
 };
 
+type SendFirebasePushOptions = {
+  includeNotificationPayload?: boolean;
+};
+
 let firebaseInitAttempted = false;
 
 function getFirebaseMessaging() {
@@ -41,7 +45,9 @@ function getFirebaseMessaging() {
 
 function toFcmData(notification: Notification) {
   const data: Record<string, string> = {
+    body: notification.message,
     notification_id: notification.id,
+    title: notification.title,
     type: notification.type,
   };
 
@@ -56,7 +62,8 @@ function toFcmData(notification: Notification) {
 
 export async function sendFirebasePush(
   tokens: string[],
-  notification: Notification
+  notification: Notification,
+  options: SendFirebasePushOptions = {}
 ): Promise<PushSendResult> {
   const messaging = getFirebaseMessaging();
 
@@ -70,12 +77,16 @@ export async function sendFirebasePush(
     return { invalidTokens: [], failureCount: 0, successCount: 0 };
   }
 
+  const includeNotificationPayload =
+    options.includeNotificationPayload ?? true;
   const response = await messaging.sendEachForMulticast({
     tokens,
-    notification: {
-      title: notification.title,
-      body: notification.message,
-    },
+    notification: includeNotificationPayload
+      ? {
+          title: notification.title,
+          body: notification.message,
+        }
+      : undefined,
     data: toFcmData(notification),
     android: {
       priority: 'high',
