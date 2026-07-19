@@ -36,7 +36,10 @@ expenseRouter.get('/', getExpenses);
 expenseRouter.post('/', postExpense);
 expenseRouter.post(
   '/:expenseId/attachments',
-  attachmentUpload.single('attachment'),
+  attachmentUpload.fields([
+    { name: 'attachment', maxCount: 1 },
+    { name: 'attachments', maxCount: 5 },
+  ]),
   postExpenseAttachment
 );
 expenseRouter.delete(

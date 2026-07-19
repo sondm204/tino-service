@@ -52,6 +52,9 @@ telegramBotRouter.post('/personal-summary', postTelegramPersonalSummary);
 telegramBotRouter.post('/expenses', postTelegramExpense);
 telegramBotRouter.post(
   '/expenses/:expenseId/attachments',
-  telegramAttachmentUpload.single('attachment'),
+  telegramAttachmentUpload.fields([
+    { name: 'attachment', maxCount: 1 },
+    { name: 'attachments', maxCount: 5 },
+  ]),
   postTelegramExpenseAttachment
 );

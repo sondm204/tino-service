@@ -463,32 +463,71 @@ export async function createExpenseAttachment(
   actorUserId: string,
   file: Express.Multer.File
 ) {
+  const [attachment] = await createExpenseAttachments(
+    walletId,
+    expenseId,
+    actorUserId,
+    [file]
+  );
+
+  return attachment;
+}
+
+export async function createExpenseAttachments(
+  walletId: string,
+  expenseId: string,
+  actorUserId: string,
+  files: Express.Multer.File[]
+) {
   await ensureCanManageExpense(walletId, expenseId, actorUserId);
-  const uploaded = await uploadExpenseAttachment(walletId, expenseId, file);
+
+  if (files.length === 0) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'attachment file is required');
+  }
+
+  const uploadedFiles: Array<{
+    file: Express.Multer.File;
+    uploaded: { key: string; url: string };
+  }> = [];
+
+  try {
+    for (const file of files) {
+      uploadedFiles.push({
+        file,
+        uploaded: await uploadExpenseAttachment(walletId, expenseId, file),
+      });
+    }
+  } catch (error) {
+    await Promise.allSettled(
+      uploadedFiles.map(({ uploaded }) => deleteObject(uploaded.key))
+    );
+    throw error;
+  }
+
   const { data, error } = await supabase
     .from('attachments')
-    .insert({
-      expense_id: expenseId,
-      file_url: uploaded.url,
-      file_path: uploaded.key,
-      file_name: file.originalname,
-      file_type: file.mimetype,
-      file_size: file.size,
-      uploaded_by_user_id: actorUserId,
-    })
+    .insert(
+      uploadedFiles.map(({ file, uploaded }) => ({
+        expense_id: expenseId,
+        file_url: uploaded.url,
+        file_path: uploaded.key,
+        file_name: file.originalname,
+        file_type: file.mimetype,
+        file_size: file.size,
+        uploaded_by_user_id: actorUserId,
+      }))
+    )
     .select('*')
-    .single();
+    .order('created_at', { ascending: true });
 
   if (error || !data) {
-    try {
-      await deleteObject(uploaded.key);
-    } catch {
-      // Keep the database error as the primary failure.
-    }
+    await Promise.allSettled(
+      uploadedFiles.map(({ uploaded }) => deleteObject(uploaded.key))
+    );
     throw new AppError(400, 'ATTACHMENT_CREATE_FAILED', error?.message || 'Attachment create failed');
   }
 
-  return data as AttachmentResponse;
+  return data as AttachmentResponse[];
 }
 
 export async function deleteExpenseAttachment(

@@ -6,6 +6,7 @@ import { getPageable } from '../../common/pageable.js';
 import { getRequiredParam } from '../../common/request.js';
 import {
   createExpenseAttachment,
+  createExpenseAttachments,
   createExpense,
   deleteExpenseAttachment,
   deleteExpense,
@@ -88,18 +89,32 @@ export async function removeExpense(req: Request, res: Response) {
 
 export async function postExpenseAttachment(req: Request, res: Response) {
   try {
-    if (!req.file) {
+    const filesByField = req.files as
+      | Record<string, Express.Multer.File[]>
+      | undefined;
+    const legacyFile = filesByField?.attachment?.[0];
+    const attachmentFiles = filesByField?.attachments ?? [];
+    const files = legacyFile ? [legacyFile] : attachmentFiles;
+
+    if (files.length === 0) {
       return sendError(res, 400, 'VALIDATION_ERROR', 'attachment file is required');
     }
 
     const walletId = getRequiredParam(req.params, 'walletId');
     const expenseId = getRequiredParam(req.params, 'expenseId');
-    const data = await createExpenseAttachment(
-      walletId,
-      expenseId,
-      getAuthenticatedUserId(req),
-      req.file
-    );
+    const data = legacyFile
+      ? await createExpenseAttachment(
+          walletId,
+          expenseId,
+          getAuthenticatedUserId(req),
+          legacyFile
+        )
+      : await createExpenseAttachments(
+          walletId,
+          expenseId,
+          getAuthenticatedUserId(req),
+          files
+        );
 
     return sendSuccess(
       res,

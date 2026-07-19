@@ -7,6 +7,7 @@ import {
   connectTelegramChat,
   createTelegramExpense,
   createTelegramExpenseAttachment,
+  createTelegramExpenseAttachments,
   createTelegramLinkCode,
   createTelegramWalletConnectCode,
   disconnectTelegramChat,
@@ -171,7 +172,14 @@ export async function postTelegramExpenseAttachment(
   res: Response
 ) {
   try {
-    if (!req.file) {
+    const filesByField = req.files as
+      | Record<string, Express.Multer.File[]>
+      | undefined;
+    const legacyFile = filesByField?.attachment?.[0];
+    const attachmentFiles = filesByField?.attachments ?? [];
+    const files = legacyFile ? [legacyFile] : attachmentFiles;
+
+    if (files.length === 0) {
       return sendError(
         res,
         400,
@@ -181,11 +189,9 @@ export async function postTelegramExpenseAttachment(
     }
 
     const expenseId = getRequiredParam(req.params, 'expenseId');
-    const data = await createTelegramExpenseAttachment(
-      expenseId,
-      req.body,
-      req.file
-    );
+    const data = legacyFile
+      ? await createTelegramExpenseAttachment(expenseId, req.body, legacyFile)
+      : await createTelegramExpenseAttachments(expenseId, req.body, files);
     return sendSuccess(
       res,
       201,

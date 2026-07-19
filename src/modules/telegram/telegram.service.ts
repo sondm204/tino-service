@@ -4,7 +4,7 @@ import { ExpenseSplitMethod, WalletMemberStatus } from '../../common/enums.js';
 import { supabase } from '../../db/supabase.js';
 import {
   createExpense,
-  createExpenseAttachment,
+  createExpenseAttachments,
 } from '../expenses/expense.service.js';
 import {
   getWallet,
@@ -638,6 +638,18 @@ export async function createTelegramExpenseAttachment(
   payload: TelegramContextRequest,
   file: Express.Multer.File
 ) {
+  const [attachment] = await createTelegramExpenseAttachments(expenseId, payload, [
+    file,
+  ]);
+
+  return attachment;
+}
+
+export async function createTelegramExpenseAttachments(
+  expenseId: string,
+  payload: TelegramContextRequest,
+  files: Express.Multer.File[]
+) {
   const context = await resolveTelegramContext(payload);
   const { data: expense, error } = await supabase
     .from('expenses')
@@ -659,10 +671,10 @@ export async function createTelegramExpenseAttachment(
     );
   }
 
-  return createExpenseAttachment(
+  return createExpenseAttachments(
     context.connection.wallet_id,
     expenseId,
     context.account.user_id,
-    file
+    files
   );
 }
