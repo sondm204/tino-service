@@ -7,6 +7,7 @@ import { getRequiredParam } from '../../common/request.js';
 import {
   addWalletMember,
   createWallet,
+  createWalletPaymentQr,
   deleteWallet,
   getWallet,
   getWalletSummary,
@@ -182,6 +183,31 @@ export async function getSummary(req: Request, res: Response) {
       200,
       'WALLET_SUMMARY_FETCHED',
       'Wallet summary fetched successfully',
+      data
+    );
+  } catch (error) {
+    if (isAppError(error)) {
+      return sendError(res, error.status, error.code, error.message);
+    }
+
+    return sendError(res, 500, 'INTERNAL_SERVER_ERROR', 'Internal server error');
+  }
+}
+
+export async function postPaymentQr(req: Request, res: Response) {
+  try {
+    const walletId = getRequiredParam(req.params, 'walletId');
+    const data = await createWalletPaymentQr(
+      walletId,
+      getAuthenticatedUserId(req),
+      req.body
+    );
+
+    return sendSuccess(
+      res,
+      200,
+      'PAYMENT_QR_CREATED',
+      'Payment QR created successfully',
       data
     );
   } catch (error) {

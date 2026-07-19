@@ -11,6 +11,7 @@ import type { PageableRequest } from '../../common/pageable.js';
 import { toPageableResponse, toSupabaseRange } from '../../common/pageable.js';
 import { supabase } from '../../db/supabase.js';
 import { createNotification } from '../notification/notification.service.js';
+import { getDefaultBankAccountForUser } from '../users/user.service.js';
 
 export type CreateWalletRequest = {
   name?: string;
@@ -65,6 +66,14 @@ export type InviteWalletMemberRequest = {
 
 export type LeaveWalletRequest = {
   new_owner_user_id?: string;
+};
+
+export type CreatePaymentQrRequest = {
+  to_user_id?: string;
+  amount?: number;
+  currency?: string;
+  content?: string;
+  month?: string;
 };
 
 type ExpenseRow = {
@@ -820,5 +829,95 @@ export async function getWalletSummary(
     currency: wallet.currency,
     member_balances: balances,
     settlements,
+  };
+}
+
+function toBankTransferText(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, (char) => (char === 'đ' ? 'd' : 'D'))
+    .replace(/[^\p{L}\p{N}\s._-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatPaymentQrMonth(month: string | undefined) {
+  const targetMonth = month || new Date().toISOString().slice(0, 7);
+
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonth)) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'month must use YYYY-MM format');
+  }
+
+  const [year, monthNumber] = targetMonth.split('-');
+
+  return `${monthNumber}/${year.slice(-2)}`;
+}
+
+async function getUserDisplayName(userId: string) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('display_name')
+    .eq('id', userId)
+    .single();
+
+  if (error || !data) {
+    throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+  }
+
+  return typeof data.display_name === 'string' && data.display_name.trim()
+    ? data.display_name.trim()
+    : 'User';
+}
+
+export async function createWalletPaymentQr(
+  walletId: string,
+  actorUserId: string,
+  payload: CreatePaymentQrRequest
+) {
+  await requireWalletMember(walletId, actorUserId);
+  const wallet = await getWallet(walletId);
+  const toUserId = payload.to_user_id?.trim();
+  const amount = Number(payload.amount);
+  const currency = payload.currency?.trim().toUpperCase() || WalletCurrency.VND;
+
+  if (!toUserId) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'to_user_id is required');
+  }
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'amount must be greater than 0');
+  }
+
+  if (currency !== WalletCurrency.VND) {
+    throw new AppError(400, 'PAYMENT_QR_CURRENCY_UNSUPPORTED', 'Payment QR currently supports VND only');
+  }
+
+  await requireWalletMember(walletId, toUserId);
+  const senderName = await getUserDisplayName(actorUserId);
+  const monthLabel = formatPaymentQrMonth(payload.month);
+  const content = toBankTransferText(
+    `TINO ${senderName} chuyen tien ${wallet.name} ${monthLabel}`
+  ).slice(0, 80);
+  const bankAccount = await getDefaultBankAccountForUser(toUserId);
+  const params = new URLSearchParams({
+    amount: String(Math.round(amount)),
+    addInfo: content,
+    accountName: bankAccount.account_name,
+  });
+  const qrImageUrl = `https://img.vietqr.io/image/${bankAccount.bank_bin}-${bankAccount.account_number}-compact2.png?${params.toString()}`;
+
+  return {
+    qr_image_url: qrImageUrl,
+    amount: Math.round(amount),
+    currency: WalletCurrency.VND,
+    content,
+    receiver: {
+      user_id: toUserId,
+      bank_name: bankAccount.bank_name,
+      bank_bin: bankAccount.bank_bin,
+      account_number: bankAccount.account_number,
+      account_name: bankAccount.account_name,
+    },
   };
 }

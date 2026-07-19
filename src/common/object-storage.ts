@@ -152,6 +152,49 @@ export async function uploadExpenseAttachment(
   return { key, url: getPublicUrl(key, config) };
 }
 
+export async function uploadBankAccountQrImage(
+  userId: string,
+  bankAccountId: string,
+  file: Express.Multer.File
+) {
+  const config = getStorageConfig();
+  const extension = extname(file.originalname).toLowerCase();
+  const safeExtension = extension && extension.length <= 6 ? extension : '';
+  const key = `users/${userId}/bank-accounts/${bankAccountId}/${randomUUID()}${safeExtension}`;
+  const client = new S3Client({
+    region: config.region,
+    endpoint: config.endpoint,
+    forcePathStyle: config.forcePathStyle,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+  });
+
+  try {
+    await client.send(
+      new PutObjectCommand({
+        Bucket: config.bucket,
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+        CacheControl: 'public, max-age=31536000, immutable',
+      })
+    );
+  } catch (error) {
+    console.error('S3 bank QR upload failed', {
+      bucket: config.bucket,
+      endpoint: config.endpoint || 'AWS default',
+      error: error instanceof Error ? error.message : String(error),
+      key,
+      region: config.region,
+    });
+    throw new AppError(502, 'BANK_QR_UPLOAD_FAILED', 'Could not upload bank QR image');
+  }
+
+  return { key, url: getPublicUrl(key, config) };
+}
+
 export async function deleteObject(key: string) {
   const config = getStorageConfig();
   const client = new S3Client({
