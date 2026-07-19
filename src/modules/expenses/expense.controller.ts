@@ -11,6 +11,7 @@ import {
   deleteExpenseAttachment,
   deleteExpense,
   listExpenses,
+  listRecentExpenses,
   updateExpense,
 } from './expense.service.js';
 
@@ -34,6 +35,23 @@ export async function getExpenses(req: Request, res: Response) {
     );
 
     return sendSuccess(res, 200, 'EXPENSE_LISTED', 'Expenses fetched successfully', data);
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+export async function getRecentExpenses(req: Request, res: Response) {
+  try {
+    const size = typeof req.query.size === 'string' ? Number(req.query.size) : 3;
+    const data = await listRecentExpenses(getAuthenticatedUserId(req), size);
+
+    return sendSuccess(
+      res,
+      200,
+      'RECENT_EXPENSES_LISTED',
+      'Recent expenses fetched successfully',
+      data
+    );
   } catch (error) {
     return handleError(res, error);
   }

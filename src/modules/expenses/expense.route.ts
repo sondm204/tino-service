@@ -3,6 +3,7 @@ import multer from 'multer';
 import { AppError } from '../../common/app-error.js';
 import {
   getExpenses,
+  getRecentExpenses,
   patchExpense,
   postExpense,
   postExpenseAttachment,
@@ -11,6 +12,7 @@ import {
 } from './expense.controller.js';
 
 export const expenseRouter = Router({ mergeParams: true });
+export const userExpenseRouter = Router();
 const attachmentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -31,6 +33,8 @@ const attachmentUpload = multer({
     callback(null, true);
   },
 });
+
+userExpenseRouter.get('/recent', getRecentExpenses);
 
 expenseRouter.get('/', getExpenses);
 expenseRouter.post('/', postExpense);

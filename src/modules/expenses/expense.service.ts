@@ -59,6 +59,10 @@ export type ExpenseResponse = {
   attachments?: AttachmentResponse[];
 };
 
+export type RecentExpenseResponse = ExpenseResponse & {
+  wallet_name: string;
+};
+
 export type AttachmentResponse = {
   id: string;
   expense_id: string;
@@ -81,6 +85,12 @@ export type ExpenseSplitResponse = {
 type ExpenseWithSplitsRow = ExpenseResponse & {
   expense_splits?: ExpenseSplitResponse[];
   attachments?: AttachmentResponse[];
+};
+
+type RecentExpenseRow = ExpenseResponse & {
+  wallet?: {
+    name?: string;
+  };
 };
 
 function validateCurrency(currency: string) {
@@ -243,6 +253,54 @@ export async function listExpenses(
   );
 
   return toPageableResponse(expensesWithSplits, pageable, count ?? 0);
+}
+
+export async function listRecentExpenses(userId: string, size = 3) {
+  const normalizedSize = Math.min(Math.max(Math.trunc(size) || 3, 1), 10);
+  const { data: memberships, error: membershipError } = await supabase
+    .from('wallet_members')
+    .select('wallet_id')
+    .eq('user_id', userId)
+    .eq('status', 'active');
+
+  if (membershipError) {
+    throw new AppError(400, 'WALLET_MEMBER_LIST_FAILED', membershipError.message);
+  }
+
+  const walletIds = (memberships ?? []).map(
+    (membership) => membership.wallet_id as string
+  );
+
+  if (walletIds.length === 0) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('expenses')
+    .select(
+      '*, wallet:wallets!inner(name), expense_splits(user_id, amount, percentage, shares), attachments(id, expense_id, file_url, file_path, file_name, file_type, file_size, uploaded_by_user_id, created_at)'
+    )
+    .in('wallet_id', walletIds)
+    .is('deleted_at', null)
+    .order('expense_date', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(normalizedSize);
+
+  if (error) {
+    throw new AppError(400, 'EXPENSE_LIST_FAILED', error.message);
+  }
+
+  return ((data ?? []) as Array<
+    RecentExpenseRow & {
+      expense_splits?: ExpenseSplitResponse[];
+      attachments?: AttachmentResponse[];
+    }
+  >).map(({ wallet, expense_splits, attachments, ...expense }) => ({
+    ...expense,
+    wallet_name: wallet?.name || '',
+    splits: expense_splits ?? [],
+    attachments: attachments ?? [],
+  })) as RecentExpenseResponse[];
 }
 
 export async function createExpense(
