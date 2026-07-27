@@ -7,6 +7,7 @@ import {
   patchExpense,
   postExpense,
   postExpenseAttachment,
+  postReceiptExpenseDraft,
   removeExpenseAttachment,
   removeExpense,
 } from './expense.controller.js';
@@ -38,6 +39,11 @@ userExpenseRouter.get('/recent', getRecentExpenses);
 
 expenseRouter.get('/', getExpenses);
 expenseRouter.post('/', postExpense);
+expenseRouter.post(
+  '/receipt-draft',
+  attachmentUpload.single('receipt'),
+  postReceiptExpenseDraft
+);
 expenseRouter.post(
   '/:expenseId/attachments',
   attachmentUpload.fields([

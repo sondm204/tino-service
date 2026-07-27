@@ -8,6 +8,7 @@ import {
   createExpenseAttachment,
   createExpenseAttachments,
   createExpense,
+  createReceiptExpenseDraft,
   deleteExpenseAttachment,
   deleteExpense,
   listExpenses,
@@ -67,6 +68,31 @@ export async function postExpense(req: Request, res: Response) {
     );
 
     return sendSuccess(res, 201, 'EXPENSE_CREATED', 'Expense created successfully', data);
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+export async function postReceiptExpenseDraft(req: Request, res: Response) {
+  try {
+    if (!req.file) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'receipt file is required');
+    }
+
+    const walletId = getRequiredParam(req.params, 'walletId');
+    const data = await createReceiptExpenseDraft(
+      walletId,
+      req.file,
+      getAuthenticatedUserId(req)
+    );
+
+    return sendSuccess(
+      res,
+      200,
+      'RECEIPT_DRAFT_CREATED',
+      'Receipt draft created successfully',
+      data
+    );
   } catch (error) {
     return handleError(res, error);
   }

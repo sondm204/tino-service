@@ -63,6 +63,19 @@ export type RecentExpenseResponse = ExpenseResponse & {
   wallet_name: string;
 };
 
+export type ReceiptExpenseDraftResponse = {
+  title: string;
+  description: string | null;
+  total_amount: number | null;
+  expense_date: string;
+  merchant_name: string | null;
+  confidence: number | null;
+  source: {
+    model_id: string;
+    api_version: string;
+  };
+};
+
 export type AttachmentResponse = {
   id: string;
   expense_id: string;
@@ -93,6 +106,31 @@ type RecentExpenseRow = ExpenseResponse & {
   };
 };
 
+type AzureReceiptField = {
+  content?: string;
+  confidence?: number;
+  valueString?: string;
+  valueDate?: string;
+  valueNumber?: number;
+  valueCurrency?: {
+    amount?: number;
+    currencyCode?: string;
+  };
+  valueArray?: Array<{
+    valueObject?: Record<string, AzureReceiptField>;
+  }>;
+};
+
+type AzureAnalyzeResult = {
+  status?: string;
+  analyzeResult?: {
+    documents?: Array<{
+      confidence?: number;
+      fields?: Record<string, AzureReceiptField>;
+    }>;
+  };
+};
+
 function validateCurrency(currency: string) {
   if (!isEnumValue(WalletCurrency, currency)) {
     throw new AppError(400, 'VALIDATION_ERROR', 'currency is invalid');
@@ -103,6 +141,159 @@ function validateSplitMethod(splitMethod: string) {
   if (!isEnumValue(ExpenseSplitMethod, splitMethod)) {
     throw new AppError(400, 'VALIDATION_ERROR', 'split_method is invalid');
   }
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function getAzureConfig() {
+  const endpoint = process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT?.replace(/\/+$/, '');
+  const key = process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY;
+  const apiVersion =
+    process.env.AZURE_DOCUMENT_INTELLIGENCE_API_VERSION || '2024-11-30';
+
+  if (!endpoint || !key) {
+    throw new AppError(
+      503,
+      'DOCUMENT_INTELLIGENCE_NOT_CONFIGURED',
+      'Azure Document Intelligence is not configured'
+    );
+  }
+
+  return { endpoint, key, apiVersion };
+}
+
+function fieldText(field?: AzureReceiptField) {
+  return field?.valueString?.trim() || field?.content?.trim() || null;
+}
+
+function parseCurrencyText(value?: string) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value
+    .replace(/[^\d,.-]/g, '')
+    .replace(/\.(?=\d{3}(\D|$))/g, '')
+    .replace(',', '.');
+  const amount = Number(normalized);
+
+  return Number.isFinite(amount) ? amount : null;
+}
+
+function fieldAmount(field?: AzureReceiptField) {
+  const amount = field?.valueCurrency?.amount ?? field?.valueNumber;
+
+  if (Number.isFinite(amount)) {
+    return Number(amount);
+  }
+
+  return parseCurrencyText(field?.content);
+}
+
+function fieldDate(field?: AzureReceiptField) {
+  const value = field?.valueDate || field?.content;
+
+  if (!value) {
+    return null;
+  }
+
+  const isoDate = value.match(/\d{4}-\d{2}-\d{2}/)?.[0];
+
+  if (isoDate) {
+    return isoDate;
+  }
+
+  const vietnameseDate = value.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
+
+  if (!vietnameseDate) {
+    return null;
+  }
+
+  const day = vietnameseDate[1].padStart(2, '0');
+  const month = vietnameseDate[2].padStart(2, '0');
+  const year =
+    vietnameseDate[3].length === 2
+      ? `20${vietnameseDate[3]}`
+      : vietnameseDate[3];
+
+  return `${year}-${month}-${day}`;
+}
+
+async function analyzeReceiptWithAzure(
+  file: Express.Multer.File
+): Promise<AzureAnalyzeResult> {
+  const { endpoint, key, apiVersion } = getAzureConfig();
+  const analyzeUrl = `${endpoint}/documentintelligence/documentModels/prebuilt-receipt:analyze?api-version=${apiVersion}`;
+  const analyzeResponse = await fetch(analyzeUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.mimetype || 'application/octet-stream',
+      'Ocp-Apim-Subscription-Key': key,
+    },
+    body: new Uint8Array(file.buffer),
+  });
+
+  if (!analyzeResponse.ok) {
+    const message = await analyzeResponse.text();
+    throw new AppError(
+      502,
+      'RECEIPT_ANALYZE_FAILED',
+      message || 'Could not analyze receipt'
+    );
+  }
+
+  const operationLocation = analyzeResponse.headers.get('operation-location');
+
+  if (!operationLocation) {
+    throw new AppError(
+      502,
+      'RECEIPT_ANALYZE_FAILED',
+      'Azure did not return an operation location'
+    );
+  }
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await delay(attempt === 0 ? 800 : 1000);
+
+    const resultResponse = await fetch(operationLocation, {
+      headers: {
+        'Ocp-Apim-Subscription-Key': key,
+      },
+    });
+
+    if (!resultResponse.ok) {
+      const message = await resultResponse.text();
+      throw new AppError(
+        502,
+        'RECEIPT_ANALYZE_FAILED',
+        message || 'Could not read receipt analysis result'
+      );
+    }
+
+    const result = (await resultResponse.json()) as AzureAnalyzeResult;
+
+    if (result.status === 'succeeded') {
+      return result;
+    }
+
+    if (result.status === 'failed') {
+      throw new AppError(
+        422,
+        'RECEIPT_ANALYZE_FAILED',
+        'Azure could not analyze this receipt'
+      );
+    }
+  }
+
+  throw new AppError(
+    504,
+    'RECEIPT_ANALYZE_TIMEOUT',
+    'Receipt analysis took too long'
+  );
 }
 
 async function ensureActiveWalletUsers(walletId: string, userIds: string[]) {
@@ -301,6 +492,45 @@ export async function listRecentExpenses(userId: string, size = 3) {
     splits: expense_splits ?? [],
     attachments: attachments ?? [],
   })) as RecentExpenseResponse[];
+}
+
+export async function createReceiptExpenseDraft(
+  walletId: string,
+  file: Express.Multer.File,
+  actorUserId: string
+): Promise<ReceiptExpenseDraftResponse> {
+  await requireWalletMember(walletId, actorUserId);
+
+  if (!file.buffer?.length) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'receipt file is required');
+  }
+
+  const apiVersion =
+    process.env.AZURE_DOCUMENT_INTELLIGENCE_API_VERSION || '2024-11-30';
+  const result = await analyzeReceiptWithAzure(file);
+  const document = result.analyzeResult?.documents?.[0];
+  const fields = document?.fields ?? {};
+  const merchantName = fieldText(fields.MerchantName);
+  const totalAmount =
+    fieldAmount(fields.Total) ??
+    fieldAmount(fields.TotalPrice) ??
+    fieldAmount(fields.SubTotal);
+  const expenseDate =
+    fieldDate(fields.TransactionDate) ||
+    fieldDate(fields.ReceiptDate) ||
+    new Date().toISOString().slice(0, 10);
+  return {
+    title: 'Mua sắm',
+    description: null,
+    total_amount: totalAmount,
+    expense_date: expenseDate,
+    merchant_name: merchantName,
+    confidence: document?.confidence ?? null,
+    source: {
+      model_id: 'prebuilt-receipt',
+      api_version: apiVersion,
+    },
+  };
 }
 
 export async function createExpense(
