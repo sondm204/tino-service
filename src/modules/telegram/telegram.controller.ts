@@ -9,6 +9,7 @@ import {
   createTelegramExpenseAttachment,
   createTelegramExpenseAttachments,
   createTelegramLinkCode,
+  createTelegramReceiptExpenseDraft,
   createTelegramWalletConnectCode,
   disconnectTelegramChat,
   getTelegramContext,
@@ -160,6 +161,30 @@ export async function postTelegramExpense(req: Request, res: Response) {
       201,
       'TELEGRAM_EXPENSE_CREATED',
       'Telegram expense created',
+      data
+    );
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+export async function postTelegramReceiptExpenseDraft(
+  req: Request,
+  res: Response
+) {
+  try {
+    const file = req.file;
+
+    if (!file) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'receipt file is required');
+    }
+
+    const data = await createTelegramReceiptExpenseDraft(req.body, file);
+    return sendSuccess(
+      res,
+      200,
+      'TELEGRAM_RECEIPT_DRAFT_CREATED',
+      'Telegram receipt draft created',
       data
     );
   } catch (error) {

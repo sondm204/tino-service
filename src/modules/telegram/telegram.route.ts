@@ -10,6 +10,7 @@ import {
   postTelegramLink,
   postTelegramLinkCode,
   postTelegramPersonalSummary,
+  postTelegramReceiptExpenseDraft,
   postTelegramSummary,
   postTelegramWalletConnectCode,
 } from './telegram.controller.js';
@@ -50,6 +51,11 @@ telegramBotRouter.post('/context', postTelegramContext);
 telegramBotRouter.post('/summary', postTelegramSummary);
 telegramBotRouter.post('/personal-summary', postTelegramPersonalSummary);
 telegramBotRouter.post('/expenses', postTelegramExpense);
+telegramBotRouter.post(
+  '/expenses/receipt-draft',
+  telegramAttachmentUpload.single('receipt'),
+  postTelegramReceiptExpenseDraft
+);
 telegramBotRouter.post(
   '/expenses/:expenseId/attachments',
   telegramAttachmentUpload.fields([

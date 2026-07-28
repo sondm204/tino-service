@@ -5,6 +5,7 @@ import { supabase } from '../../db/supabase.js';
 import {
   createExpense,
   createExpenseAttachments,
+  createReceiptExpenseDraft,
 } from '../expenses/expense.service.js';
 import {
   getWallet,
@@ -631,6 +632,19 @@ export async function createTelegramExpense(
     wallet_name: context.wallet.name,
     member_status: WalletMemberStatus.Active,
   };
+}
+
+export async function createTelegramReceiptExpenseDraft(
+  payload: TelegramContextRequest,
+  file: Express.Multer.File
+) {
+  const context = await resolveTelegramContext(payload);
+
+  return createReceiptExpenseDraft(
+    context.connection.wallet_id,
+    file,
+    context.account.user_id
+  );
 }
 
 export async function createTelegramExpenseAttachment(
