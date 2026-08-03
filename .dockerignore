@@ -1,0 +1,12 @@
+.env
+.env.*
+.git
+.github
+dist
+node_modules
+npm-debug.log*
+pnpm-debug.log*
+Dockerfile
+docker-compose.yml
+README.md
+web.config
