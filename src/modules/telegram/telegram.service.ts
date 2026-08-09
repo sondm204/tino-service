@@ -48,6 +48,11 @@ type TelegramPersonalSummaryRequest = {
   month?: string;
 };
 
+type TelegramScheduledSummaryRequest = {
+  period_start?: string;
+  period_end?: string;
+};
+
 type CreateTelegramExpenseRequest = TelegramContextRequest & {
   title?: string;
   total_amount?: number;
@@ -63,6 +68,34 @@ type TelegramExpenseSplitRow = {
   expense_id: string;
   user_id: string;
   amount: number | string | null;
+};
+
+type ScheduledSummaryExpenseRow = {
+  id: string;
+  wallet_id: string;
+  total_amount: number | string;
+  paid_by_user_id: string;
+};
+
+type ScheduledSummaryMemberRow = {
+  wallet_id: string;
+  user_id: string;
+  user?: {
+    display_name?: string | null;
+    email?: string | null;
+  } | null;
+};
+
+type ConnectedTelegramChatRow = {
+  telegram_chat_id: number | string;
+  telegram_chat_title: string | null;
+  wallet_id: string;
+  wallet?: {
+    id: string;
+    name: string;
+    currency: string;
+    deleted_at: string | null;
+  } | null;
 };
 
 function normalizeTelegramId(value: string | undefined, field: string) {
@@ -92,6 +125,31 @@ function generateCode() {
     .slice(0, 8)
     .toUpperCase()
     .padEnd(8, '0');
+}
+
+function normalizeDateOnly(value: string | undefined, field: string) {
+  const normalized = value?.trim();
+
+  if (!normalized || !/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    throw new AppError(400, 'VALIDATION_ERROR', `${field} must use YYYY-MM-DD`);
+  }
+
+  return normalized;
+}
+
+function normalizePeriod(payload: TelegramScheduledSummaryRequest) {
+  const periodStart = normalizeDateOnly(payload.period_start, 'period_start');
+  const periodEnd = normalizeDateOnly(payload.period_end, 'period_end');
+
+  if (periodEnd <= periodStart) {
+    throw new AppError(
+      400,
+      'VALIDATION_ERROR',
+      'period_end must be after period_start'
+    );
+  }
+
+  return { periodStart, periodEnd };
 }
 
 function codeExpiry() {
@@ -593,6 +651,177 @@ export async function getTelegramPersonalSummary(
     totals_by_currency: Array.from(totalsByCurrency.values()),
     wallets: Array.from(walletSummaryById.values()),
   };
+}
+
+export async function getTelegramScheduledSummaries(
+  payload: TelegramScheduledSummaryRequest
+) {
+  const { periodStart, periodEnd } = normalizePeriod(payload);
+  const { data: connections, error: connectionError } = await supabase
+    .from('telegram_chat_wallets')
+    .select(
+      `
+        telegram_chat_id,
+        telegram_chat_title,
+        wallet_id,
+        wallet:wallets!inner (
+          id,
+          name,
+          currency,
+          deleted_at
+        )
+      `
+    )
+    .is('wallet.deleted_at', null);
+
+  if (connectionError) {
+    throw new AppError(
+      400,
+      'TELEGRAM_CONNECTION_LIST_FAILED',
+      connectionError.message
+    );
+  }
+
+  const connectedChats = (connections ?? []) as unknown as ConnectedTelegramChatRow[];
+  const walletIds = connectedChats.map((connection) => connection.wallet_id);
+
+  if (walletIds.length === 0) {
+    return [];
+  }
+
+  const [expensesResult, membersResult] = await Promise.all([
+    supabase
+      .from('expenses')
+      .select('id, wallet_id, total_amount, paid_by_user_id')
+      .in('wallet_id', walletIds)
+      .gte('expense_date', periodStart)
+      .lt('expense_date', periodEnd)
+      .is('deleted_at', null),
+    supabase
+      .from('wallet_members')
+      .select(
+        `
+          wallet_id,
+          user_id,
+          user:users!wallet_members_user_id_fkey (
+            email,
+            display_name
+          )
+        `
+      )
+      .in('wallet_id', walletIds)
+      .eq('status', WalletMemberStatus.Active),
+  ]);
+
+  const { data: expenses, error: expensesError } = expensesResult;
+
+  if (expensesError) {
+    throw new AppError(400, 'EXPENSE_LIST_FAILED', expensesError.message);
+  }
+
+  const { data: members, error: membersError } = membersResult;
+
+  if (membersError) {
+    throw new AppError(400, 'WALLET_MEMBER_LIST_FAILED', membersError.message);
+  }
+
+  const expenseRows = (expenses ?? []) as ScheduledSummaryExpenseRow[];
+  const expenseIds = expenseRows.map((expense) => expense.id);
+  const membersByWallet = new Map<string, ScheduledSummaryMemberRow[]>();
+  const splitsByExpense = new Map<string, TelegramExpenseSplitRow[]>();
+
+  for (const member of (members ?? []) as unknown as ScheduledSummaryMemberRow[]) {
+    const current = membersByWallet.get(member.wallet_id) ?? [];
+    current.push(member);
+    membersByWallet.set(member.wallet_id, current);
+  }
+
+  if (expenseIds.length > 0) {
+    const { data: splits, error: splitsError } = await supabase
+      .from('expense_splits')
+      .select('expense_id, user_id, amount')
+      .in('expense_id', expenseIds);
+
+    if (splitsError) {
+      throw new AppError(400, 'EXPENSE_SPLIT_LIST_FAILED', splitsError.message);
+    }
+
+    for (const split of (splits ?? []) as TelegramExpenseSplitRow[]) {
+      const current = splitsByExpense.get(split.expense_id) ?? [];
+      current.push(split);
+      splitsByExpense.set(split.expense_id, current);
+    }
+  }
+
+  const expensesByWallet = new Map<string, ScheduledSummaryExpenseRow[]>();
+
+  for (const expense of expenseRows) {
+    const current = expensesByWallet.get(expense.wallet_id) ?? [];
+    current.push(expense);
+    expensesByWallet.set(expense.wallet_id, current);
+  }
+
+  return connectedChats.map((connection) => {
+    const walletMembers = membersByWallet.get(connection.wallet_id) ?? [];
+    const activeUserIds = walletMembers.map((member) => member.user_id);
+    const paidByUser = new Map<string, number>();
+    const shareByUser = new Map<string, number>();
+    let totalAmount = 0;
+
+    for (const expense of expensesByWallet.get(connection.wallet_id) ?? []) {
+      const amount = Number(expense.total_amount);
+      totalAmount += amount;
+      paidByUser.set(
+        expense.paid_by_user_id,
+        (paidByUser.get(expense.paid_by_user_id) ?? 0) + amount
+      );
+
+      const splits = splitsByExpense.get(expense.id) ?? [];
+
+      if (splits.length > 0) {
+        for (const split of splits) {
+          shareByUser.set(
+            split.user_id,
+            (shareByUser.get(split.user_id) ?? 0) + Number(split.amount ?? 0)
+          );
+        }
+      } else if (activeUserIds.length > 0) {
+        const equalShare = amount / activeUserIds.length;
+
+        for (const userId of activeUserIds) {
+          shareByUser.set(userId, (shareByUser.get(userId) ?? 0) + equalShare);
+        }
+      }
+    }
+
+    const member_balances = walletMembers.map((member) => {
+      const paid = paidByUser.get(member.user_id) ?? 0;
+      const share = shareByUser.get(member.user_id) ?? 0;
+
+      return {
+        user_id: member.user_id,
+        display_name:
+          member.user?.display_name || member.user?.email || member.user_id,
+        paid,
+        share,
+        balance: paid - share,
+      };
+    });
+
+    return {
+      telegram_chat_id: String(connection.telegram_chat_id),
+      telegram_chat_title: connection.telegram_chat_title,
+      wallet: {
+        id: connection.wallet?.id ?? connection.wallet_id,
+        name: connection.wallet?.name ?? '',
+        currency: connection.wallet?.currency ?? 'VND',
+      },
+      period_start: periodStart,
+      period_end: periodEnd,
+      total_amount: totalAmount,
+      member_balances,
+    };
+  });
 }
 
 export async function createTelegramExpense(

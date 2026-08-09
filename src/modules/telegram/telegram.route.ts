@@ -11,6 +11,7 @@ import {
   postTelegramLinkCode,
   postTelegramPersonalSummary,
   postTelegramReceiptExpenseDraft,
+  postTelegramScheduledSummaries,
   postTelegramSummary,
   postTelegramWalletConnectCode,
 } from './telegram.controller.js';
@@ -50,6 +51,7 @@ telegramBotRouter.post('/disconnect', postTelegramDisconnect);
 telegramBotRouter.post('/context', postTelegramContext);
 telegramBotRouter.post('/summary', postTelegramSummary);
 telegramBotRouter.post('/personal-summary', postTelegramPersonalSummary);
+telegramBotRouter.post('/scheduled-summaries', postTelegramScheduledSummaries);
 telegramBotRouter.post('/expenses', postTelegramExpense);
 telegramBotRouter.post(
   '/expenses/receipt-draft',

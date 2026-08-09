@@ -14,6 +14,7 @@ import {
   disconnectTelegramChat,
   getTelegramContext,
   getTelegramPersonalSummary,
+  getTelegramScheduledSummaries,
   getTelegramSummary,
   linkTelegramAccount,
 } from './telegram.service.js';
@@ -146,6 +147,24 @@ export async function postTelegramPersonalSummary(req: Request, res: Response) {
       200,
       'TELEGRAM_PERSONAL_SUMMARY_FETCHED',
       'Telegram personal summary fetched',
+      data
+    );
+  } catch (error) {
+    return handleError(res, error);
+  }
+}
+
+export async function postTelegramScheduledSummaries(
+  req: Request,
+  res: Response
+) {
+  try {
+    const data = await getTelegramScheduledSummaries(req.body);
+    return sendSuccess(
+      res,
+      200,
+      'TELEGRAM_SCHEDULED_SUMMARIES_FETCHED',
+      'Telegram scheduled summaries fetched',
       data
     );
   } catch (error) {
