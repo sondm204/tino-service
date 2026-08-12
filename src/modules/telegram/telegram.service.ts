@@ -852,6 +852,7 @@ export async function createTelegramExpense(
       paid_by_user_id: context.account.user_id,
       expense_date: payload.expense_date,
       split_method: ExpenseSplitMethod.Equal,
+      notify_telegram: false,
     },
     context.account.user_id
   );

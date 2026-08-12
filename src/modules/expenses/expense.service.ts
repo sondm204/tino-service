@@ -2,6 +2,7 @@ import { AppError } from '../../common/app-error.js';
 import {
   ExpenseSplitMethod,
   WalletCurrency,
+  WalletType,
   WalletMemberRole,
   isEnumValue,
 } from '../../common/enums.js';
@@ -36,6 +37,7 @@ export type CreateExpenseRequest = {
   expense_date?: string;
   split_method?: string;
   splits?: ExpenseSplitRequest[];
+  notify_telegram?: boolean;
 };
 
 export type UpdateExpenseRequest = Partial<CreateExpenseRequest>;
@@ -361,6 +363,89 @@ async function notifyWalletMembers(input: {
   }
 }
 
+async function notifyTelegramGroupExpenseCreated(input: {
+  walletId: string;
+  actorUserId: string;
+  paidByUserId: string;
+  title: string;
+  totalAmount: number;
+  currency: string;
+  expenseDate: string;
+}) {
+  const telebotBaseUrl = process.env.TINO_TELEBOT_BASE_URL?.replace(/\/+$/, '');
+  const serviceSecret = process.env.TELEGRAM_BOT_SERVICE_SECRET;
+
+  if (!telebotBaseUrl || !serviceSecret) {
+    return;
+  }
+
+  try {
+    const [walletResult, connectionResult, usersResult] = await Promise.all([
+      supabase
+        .from('wallets')
+        .select('id, name, type')
+        .eq('id', input.walletId)
+        .is('deleted_at', null)
+        .single(),
+      supabase
+        .from('telegram_chat_wallets')
+        .select('telegram_chat_id')
+        .eq('wallet_id', input.walletId)
+        .maybeSingle(),
+      supabase
+        .from('users')
+        .select('id, email, display_name')
+        .in('id', [input.actorUserId, input.paidByUserId]),
+    ]);
+
+    const { data: wallet, error: walletError } = walletResult;
+
+    if (walletError || !wallet || wallet.type !== WalletType.Shared) {
+      return;
+    }
+
+    const { data: connection, error: connectionError } = connectionResult;
+
+    if (connectionError || !connection) {
+      return;
+    }
+
+    const userById = new Map(
+      (usersResult.data ?? []).map((user) => [
+        user.id as string,
+        (user.display_name as string | null) || (user.email as string | null) || user.id,
+      ])
+    );
+    const response = await fetch(`${telebotBaseUrl}/internal/telegram/expense-created`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-tino-bot-secret': serviceSecret,
+      },
+      body: JSON.stringify({
+        telegram_chat_id: String(connection.telegram_chat_id),
+        wallet_name: wallet.name,
+        actor_name: userById.get(input.actorUserId) || input.actorUserId,
+        payer_name: userById.get(input.paidByUserId) || input.paidByUserId,
+        title: input.title,
+        total_amount: input.totalAmount,
+        currency: input.currency,
+        expense_date: input.expenseDate,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!response.ok) {
+      console.error(
+        'Could not send Telegram expense notification',
+        await response.text().catch(() => response.statusText)
+      );
+    }
+  } catch (error) {
+    console.error('Could not send Telegram expense notification', error);
+  }
+}
+
 async function ensureCanManageExpense(
   walletId: string,
   expenseId: string,
@@ -621,6 +706,18 @@ export async function createExpense(
       expense_id: expense.id,
     },
   });
+
+  if (payload.notify_telegram !== false) {
+    await notifyTelegramGroupExpenseCreated({
+      walletId,
+      actorUserId,
+      paidByUserId,
+      title,
+      totalAmount,
+      currency,
+      expenseDate,
+    });
+  }
 
   return expense as ExpenseResponse;
 }
