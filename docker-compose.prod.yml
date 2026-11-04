@@ -13,6 +13,9 @@ services:
       - "127.0.0.1:4000:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - tino-internal
     healthcheck:
       test:
         - CMD
@@ -29,3 +32,8 @@ services:
         max-size: "10m"
         max-file: "3"
     restart: unless-stopped
+
+networks:
+  tino-internal:
+    external: true
+    name: tino-internal
