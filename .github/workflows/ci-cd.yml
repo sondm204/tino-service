@@ -45,15 +45,33 @@ jobs:
       - name: Deploy this commit locally on the VPS
         run: |
           set -euo pipefail
+          trap 'echo "::error::Deployment failed at script line $LINENO (exit $?)."' ERR
           release="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          root=/opt/tino-service
-          test -s "$root/.env.production"
-          docker network inspect tino-internal >/dev/null
+          root=/home/sondm204/projects/Tino/tino-service
+          echo "Checking deployment prerequisites as $(id -un) on $(hostname)"
+          if [[ ! -s "$root/.env.production" || ! -r "$root/.env.production" ]]; then
+            echo "::error::Missing, empty, or unreadable $root/.env.production. Create it on the VPS and grant the runner service user read access."
+            exit 1
+          fi
+          if [[ ! -w "$root" || ! -x "$root" ]]; then
+            echo "::error::Runner service user needs write and traversal access to $root."
+            exit 1
+          fi
+          if ! docker info >/dev/null; then
+            echo "::error::Docker is unavailable to the runner service user. Check the Docker daemon and user permissions."
+            exit 1
+          fi
+          if ! docker network inspect tino-internal >/dev/null; then
+            echo "::error::Required Docker network tino-internal is missing. Create it on the VPS with: docker network create tino-internal"
+            exit 1
+          fi
+          docker compose version
+          echo "Preparing release $release"
           mkdir -p "$root/releases/$release"
           git archive --format=tar HEAD | tar -xf - -C "$root/releases/$release"
           cd "$root/releases/$release"
           ln -s "$root/.env.production" .env.production
-          # Keep the same project name as the initial /opt/tino-service deployment.
+          # Keep a stable Compose project name across release directories.
           docker compose -p tino-service -f docker-compose.prod.yml config --quiet
           docker compose -p tino-service -f docker-compose.prod.yml build --pull
           docker compose -p tino-service -f docker-compose.prod.yml up \
