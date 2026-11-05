@@ -195,22 +195,17 @@ with the frozen pnpm lockfile and compiles TypeScript. There is currently no tes
 script in package.json. Deployment runs only on `main`, after the build succeeds.
 
 Create a GitHub environment named `production` under **Settings > Environments**.
-Add these environment secrets (repository secrets also work):
+The build job runs on GitHub's `ubuntu-latest` runner. The deploy job runs directly
+on the VPS using its registered self-hosted runner with labels `self-hosted`,
+`linux`, and `x64`. Ensure the matching runner is online and belongs to the target
+VPS. If multiple runners have these labels, add a unique VPS label to `runs-on`
+so deployment is routed to the correct host.
 
-| Secret | Value |
-| --- | --- |
-| `SSH_HOST` | VPS hostname or IP address |
-| `SSH_USER` | Dedicated deployment user on the VPS |
-| `SSH_PRIVATE_KEY` | Full private SSH key, without a passphrase, for that user |
-| `SSH_KNOWN_HOSTS` | Verified SSH known_hosts entry for the VPS |
+No SSH secrets or SSH port variable are required. The workflow does not use SSH
+or SCP. Keep application configuration in `/opt/tino-service/.env.production`,
+outside the runner checkout directory.
 
-Set the environment variable `SSH_PORT` if SSH uses a port other than 22.
-Obtain the server host key from a trusted connection or your VPS console and
-verify its fingerprint before storing the known_hosts entry. For a custom port,
-the entry uses `[hostname]:port`. The workflow requires strict host-key checking.
-Install the deployment public key in that user's `~/.ssh/authorized_keys`.
-
-Prepare the VPS using sections 1–4 above. The deployment user must own
+Prepare the VPS using sections 1–4 above. The runner service user must own
 `/opt/tino-service`, be able to read `/opt/tino-service/.env.production`, and run
 Docker without interactive sudo. Docker access effectively grants root privileges;
 use a dedicated account. Ensure `curl` is installed and Compose supports `--wait`.
@@ -220,7 +215,7 @@ Create the external network once if it does not already exist:
 sudo docker network inspect tino-internal >/dev/null 2>&1 || sudo docker network create tino-internal
 ```
 
-Every deployment uploads the exact checked-out commit over SSH into a fresh
+Every deployment extracts the exact checked-out commit locally into a fresh
 `/opt/tino-service/releases/<commit>-<run>-<attempt>` directory. The VPS rebuilds
 the image, then updates the existing `tino-service` Compose project and waits for
 its healthcheck. Both runner and VPS need access to the image/package registries;
@@ -245,4 +240,4 @@ package downloads, so it is not an immutable-image rollback.
 
 Push the workflow to `main` after configuring the environment, or use **Actions >
 CI/CD > Run workflow** on `main`. A successful build alone does not establish
-that production secrets or SSH connectivity are configured correctly.
+that the VPS runner permissions or production configuration are correct.
