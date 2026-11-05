@@ -1,4 +1,3 @@
-test
 # Ubuntu VPS deployment
 
 This setup runs the API in Docker, keeps Supabase hosted, and uses Nginx on
