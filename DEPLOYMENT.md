@@ -160,6 +160,9 @@ image upload, OCR, and Telegram group notifications before retiring the old API.
 
 ## 5. Updates, migrations and backup
 
+For automated updates, use the GitHub Actions setup below. The following manual
+commands apply to a deployment still managed from the original checkout.
+
 ```bash
 cd /opt/tino-service
 git pull --ff-only
@@ -183,3 +186,63 @@ stack may briefly interrupt requests; it is not a zero-downtime deployment.
 Before wider public exposure, review application-level rate limiting on auth and
 OCR routes and restrict CORS to the actual web origins. HTTPS and Docker alone
 do not provide abuse protection.
+
+## 6. GitHub Actions CI/CD
+
+`.github/workflows/ci-cd.yml` builds the production Docker image for pull requests
+to `main`, pushes to `main`, and manual runs. The Dockerfile installs dependencies
+with the frozen pnpm lockfile and compiles TypeScript. There is currently no test
+script in package.json. Deployment runs only on `main`, after the build succeeds.
+
+Create a GitHub environment named `production` under **Settings > Environments**.
+Add these environment secrets (repository secrets also work):
+
+| Secret | Value |
+| --- | --- |
+| `SSH_HOST` | VPS hostname or IP address |
+| `SSH_USER` | Dedicated deployment user on the VPS |
+| `SSH_PRIVATE_KEY` | Full private SSH key, without a passphrase, for that user |
+| `SSH_KNOWN_HOSTS` | Verified SSH known_hosts entry for the VPS |
+
+Set the environment variable `SSH_PORT` if SSH uses a port other than 22.
+Obtain the server host key from a trusted connection or your VPS console and
+verify its fingerprint before storing the known_hosts entry. For a custom port,
+the entry uses `[hostname]:port`. The workflow requires strict host-key checking.
+Install the deployment public key in that user's `~/.ssh/authorized_keys`.
+
+Prepare the VPS using sections 1–4 above. The deployment user must own
+`/opt/tino-service`, be able to read `/opt/tino-service/.env.production`, and run
+Docker without interactive sudo. Docker access effectively grants root privileges;
+use a dedicated account. Ensure `curl` is installed and Compose supports `--wait`.
+Create the external network once if it does not already exist:
+
+```bash
+sudo docker network inspect tino-internal >/dev/null 2>&1 || sudo docker network create tino-internal
+```
+
+Every deployment uploads the exact checked-out commit over SSH into a fresh
+`/opt/tino-service/releases/<commit>-<run>-<attempt>` directory. The VPS rebuilds
+the image, then updates the existing `tino-service` Compose project and waits for
+its healthcheck. Both runner and VPS need access to the image/package registries;
+the image is rebuilt on the VPS, not transferred from CI. The production env file
+stays on the VPS and is symlinked into each release. No database migration runs.
+
+After success, `/opt/tino-service/current` points to the release. Use it for
+subsequent operational commands, always keeping the project name:
+
+```bash
+cd /opt/tino-service/current
+docker compose -p tino-service -f docker-compose.prod.yml ps
+docker compose -p tino-service -f docker-compose.prod.yml logs --tail=100 api
+```
+
+A failed healthcheck fails the workflow; it does not automatically roll back the
+container. To roll back, enter a previous release directory and run
+`docker compose -p tino-service -f docker-compose.prod.yml up -d --build --wait`.
+Keep release directories needed for rollback and periodically remove older ones
+to manage disk usage. Rebuilding an old release may resolve newer base images or
+package downloads, so it is not an immutable-image rollback.
+
+Push the workflow to `main` after configuring the environment, or use **Actions >
+CI/CD > Run workflow** on `main`. A successful build alone does not establish
+that production secrets or SSH connectivity are configured correctly.

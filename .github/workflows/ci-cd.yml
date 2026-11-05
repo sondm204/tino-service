@@ -1,0 +1,94 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never interrupt a deployment that has already started.
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Validate production Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Dockerfile installs the locked dependencies and runs pnpm build (tsc).
+      - name: Build production image
+        run: docker build --tag tino-service:ci .
+
+  deploy:
+    name: Deploy to Ubuntu VPS
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Set SSH_HOST in the production environment}"
+          : "${SSH_USER:?Set SSH_USER in the production environment}"
+          : "${SSH_PRIVATE_KEY:?Set SSH_PRIVATE_KEY in the production environment}"
+          : "${SSH_KNOWN_HOSTS:?Set SSH_KNOWN_HOSTS in the production environment}"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Upload and deploy this commit
+        run: |
+          set -euo pipefail
+          release="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          archive="/tmp/tino-service-${release}.tar.gz"
+          git archive --format=tar.gz --output=release.tar.gz HEAD
+          scp -P "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            release.tar.gz "${SSH_USER}@${SSH_HOST}:${archive}"
+          ssh -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 -o ServerAliveInterval=30 \
+            "${SSH_USER}@${SSH_HOST}" bash -s -- "$release" <<'REMOTE'
+          set -euo pipefail
+          release="$1"
+          root=/opt/tino-service
+          archive="/tmp/tino-service-${release}.tar.gz"
+          trap 'rm -f -- "$archive"' EXIT
+          test -s "$root/.env.production"
+          docker network inspect tino-internal >/dev/null
+          mkdir -p "$root/releases/$release"
+          tar -xzf "$archive" -C "$root/releases/$release"
+          cd "$root/releases/$release"
+          ln -s "$root/.env.production" .env.production
+          # Keep the same project name as the initial /opt/tino-service deployment.
+          docker compose -p tino-service -f docker-compose.prod.yml config --quiet
+          docker compose -p tino-service -f docker-compose.prod.yml build --pull
+          docker compose -p tino-service -f docker-compose.prod.yml up \
+            -d --no-build --wait --wait-timeout 120
+          curl --fail --silent --show-error http://127.0.0.1:4000/health
+          ln -sfn "$root/releases/$release" "$root/current"
+          REMOTE
+
+      - name: Remove SSH credentials
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts
